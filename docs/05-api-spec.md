@@ -388,6 +388,224 @@ WebSocket 연결. JWT를 `?token=...` 쿼리 또는 헤더로 전달.
 
 ---
 
+## 공공데이터셋 (SHP 업로드)
+
+사용자가 공공데이터포털·행안부·기상청 등에서 받은 Shapefile을 업로드해 AOI 후보로 저장. 상세 배경은 [15. 프론트엔드 아키텍처 §6](./15-frontend-architecture.md#6-공공데이터shp-업로드-플로우) 참조.
+
+### `POST /public-datasets`
+
+**권한**: `downloader` 이상
+**Content-Type**: `multipart/form-data`
+
+| 파트 | 타입 | 필수 | 설명 |
+|------|------|------|------|
+| `file` | file | 필수 | `.zip` (shp+shx+dbf+prj). 최대 50MB |
+| `name` | string | 필수 | 표시명. 최대 200자 |
+| `description` | string | 옵션 | 2행 설명. 최대 1000자 |
+
+**응답 201**:
+```json
+{
+    "id": "uuid",
+    "name": "성남시 행정동 경계",
+    "description": "2025 행안부 공고",
+    "geom": { "type": "MultiPolygon", "coordinates": [...] },
+    "bbox": [127.07, 37.33, 127.22, 37.49],
+    "feature_count": 42,
+    "srid_source": "EPSG:5179",
+    "size_bytes": 324000,
+    "is_public": false,
+    "uploaded_by": "uuid",
+    "created_at": "2026-04-24T09:00:00Z"
+}
+```
+
+**동작**:
+- 서버가 zip 검증 → `shp` 파싱 (예: `shapefile` npm + `proj4`) → EPSG:4326으로 변환 → `public_datasets.geom` 저장
+- 피처가 많거나 복잡하면 `ST_Simplify`로 경량화 버전을 별도 컬럼에 병행 저장 (지도 표시용)
+- 원본 zip은 NAS `/public-datasets/{id}.zip`에 감사용 보관
+- 좌표계 자동 감지 실패 시 `400 Bad Request` + `code: "UNSUPPORTED_SRID"`
+- 크기/개수 한도 초과 시 `413 Payload Too Large`
+
+### `GET /public-datasets`
+
+**권한**: 인증
+
+**쿼리 파라미터**:
+- `scope`: `mine` (내가 업로드한 것만) / `public` / `all` (기본: `all`)
+- `q`: 이름 검색
+- `limit`, `offset`: 기본 offset 페이지네이션
+
+```json
+{
+    "items": [
+        {
+            "id": "uuid",
+            "name": "...",
+            "bbox": [..., ..., ..., ...],
+            "feature_count": 42,
+            "is_public": true,
+            "uploaded_by_display_name": "홍길동",
+            "created_at": "..."
+        }
+    ],
+    "total": 12,
+    "limit": 50,
+    "offset": 0,
+    "has_more": false
+}
+```
+
+### `GET /public-datasets/{id}`
+
+**권한**: 인증 (public 또는 본인 업로드만 200, 그 외 403)
+
+응답에 **GeoJSON** 전체 포함 (지도 미리보기용). 경량화 버전을 먼저 반환하고 `?full=true` 로 원본 geom 요청 가능.
+
+### `GET /public-datasets/{id}/download`
+
+**권한**: 본인 업로드 또는 `admin`
+
+원본 zip 파일 스트리밍 또는 프리사인드 URL 302 리다이렉트.
+
+### `DELETE /public-datasets/{id}`
+
+**권한**: 본인 업로드 또는 `admin`
+
+연결된 검색 이력은 유지, 원본 zip은 즉시 삭제하지 않고 30일 cleanup 대상.
+
+### `POST /scenes/search-by-dataset`
+
+데이터셋 geom을 AOI로 사용해 scene 검색.
+
+```json
+// Request
+{ "dataset_id": "uuid", "date_from": "...", "date_to": "...", "mission": "S1A,S2A" }
+```
+
+응답은 `GET /scenes`와 동일 포맷.
+
+**동작**: 서버가 `dataset.geom`에서 bbox 추출 또는 `ST_Intersects`로 직접 필터. `limit/cursor`는 쿼리 파라미터로 이어받는다.
+
+---
+
+## 관리자 API (추가)
+
+### `PATCH /admin/public-datasets/{id}`
+
+```json
+// Request
+{ "is_public": true }
+```
+
+공개 전환. 공개 시 모든 인증 사용자가 `GET /public-datasets`에서 조회 가능.
+
+### `DELETE /admin/public-datasets/{id}`
+
+소유자 관계없이 강제 삭제. 연결 이력은 유지.
+
+### `GET /admin/audit-logs`
+
+감사 로그 조회. **Cursor 기반 페이지네이션**.
+
+**쿼리 파라미터**:
+- `user_id`, `action`, `code`, `date_from`, `date_to`, `limit`, `cursor`
+
+```json
+{
+    "items": [
+        {
+            "id": "uuid",
+            "at": "2026-04-24T09:10:00Z",
+            "user_id": "uuid",
+            "user_email": "holder@example.com",
+            "action": "download.request",
+            "code": null,
+            "ip": "10.0.1.42",
+            "user_agent": "Mozilla/...",
+            "request_id": "...",
+            "payload": { "scene_ids": [...] }
+        }
+    ],
+    "next_cursor": "...",
+    "has_more": true
+}
+```
+
+### `GET /admin/audit-logs/export.csv`
+
+현재 필터 조건 기준 CSV 스트리밍. **최대 10만건**. 10만 초과 시 `413` + `code: "EXPORT_LIMIT_EXCEEDED"` 및 분할 쿼리 안내 메시지.
+
+### `GET /admin/sync-status`
+
+메타데이터 sync 현황.
+
+```json
+{
+    "aois": [
+        {
+            "crawl_target_id": "uuid",
+            "name": "한반도",
+            "last_synced_at": "2026-04-24T08:00:00Z",
+            "last_success": true,
+            "new_scenes_last_24h": 42,
+            "avg_duration_ms": 12000,
+            "status": "healthy"            // healthy | stale | failing
+        }
+    ],
+    "overall": {
+        "oldest_sync_at": "2026-04-24T06:00:00Z",
+        "stale_aoi_count": 0,
+        "failing_aoi_count": 0
+    }
+}
+```
+
+`status` 기준:
+- `healthy`: 마지막 sync < 6시간
+- `stale`: 6~24시간
+- `failing`: 최근 2회 이상 연속 실패 또는 24시간 초과
+
+### `POST /admin/crawl-targets/{id}/trigger`
+
+AOI 즉시 크롤 수동 실행.
+
+**응답 202**:
+```json
+{ "job_id": "uuid", "message": "Crawl queued" }
+```
+
+쿼터 없음, `admin`만.
+
+### `POST /admin/sync-logs/{id}/retry`
+
+실패한 sync 잡 재시도. `202` + `job_id` 응답.
+
+---
+
+## InSAR 분석 산출물 API (Phase 후속, 상세는 [18-insar-products.md](./18-insar-products.md))
+
+> **상태**: 플레이스홀더. DInSAR/SBAS는 곧 추가 예정, PSInSAR는 후속.
+
+| 메서드 | 경로 | 권한 | 용도 |
+|--------|------|------|------|
+| GET | `/insar-products` | 인증 | 목록 (bbox/타입/날짜/미션 필터, cursor) |
+| GET | `/insar-products/{id}` | 인증 | 상세 (메타 + 원본 scene + 레이어 목록) |
+| GET | `/insar-products/{id}/quicklook` | 인증 | 평균 변위 PNG |
+| GET | `/insar-products/{id}/tiles/{layer}/{z}/{x}/{y}.png` | 인증 | XYZ 타일 (DInSAR/SBAS 래스터) |
+| POST | `/insar-products/{id}/points` | 인증 | PSInSAR 포인트 viewport 기반 조회 |
+| GET | `/insar-products/{id}/timeseries` | 인증 | 픽셀/포인트 시계열 (lng/lat 또는 point_id) |
+| GET | `/insar-products/{id}/download` | downloader+ | GeoTIFF/NetCDF/CSV 다운로드 (포맷/레이어 지정) |
+| POST | `/admin/insar-jobs` | admin | 신규 생성 잡 등록 |
+| GET | `/admin/insar-jobs` | admin | 잡 큐 조회 |
+| GET | `/admin/insar-jobs/{id}` | admin | 잡 상태 상세 |
+| PATCH | `/admin/insar-products/{id}` | admin | 공개/비공개 토글 등 |
+| DELETE | `/admin/insar-products/{id}` | admin | 삭제 |
+
+쿼터: 원본 scene 다운로드와 **분리된 카운터** 적용 예정 (산출물은 용량이 작음).
+
+---
+
 ## Rate Limit
 
 | 엔드포인트 | 한도 |
@@ -395,6 +613,10 @@ WebSocket 연결. JWT를 `?token=...` 쿼리 또는 헤더로 전달.
 | `GET /scenes` | 60 req/min per user |
 | `POST /downloads` | 10 req/min per user |
 | `GET /downloads/*` | 300 req/min per user |
+| `POST /public-datasets` | 5 req/min per user (업로드 과다 방지) |
+| `GET /public-datasets/*` | 120 req/min per user |
+| `POST /insar-products/*/points` | 30 req/min per user |
+| `GET /insar-products/*/timeseries` | 60 req/min per user |
 | `GET /ws/notifications` | 5 동시 연결 per user |
 
 초과 시 `429` 응답 + `Retry-After` 헤더.

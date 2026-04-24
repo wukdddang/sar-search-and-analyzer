@@ -62,6 +62,11 @@ Node 22 LTS · pnpm 9 · NestJS 10 · TypeScript 5 · TypeORM 0.3 · PostgreSQL 
 - [docs/12-legacy-reference.md](./docs/12-legacy-reference.md) — `sar-data-retrieval` 이관 가이드
 - [docs/13-error-codes.md](./docs/13-error-codes.md) — 에러 코드 레지스트리 (`code` 필드)
 - [docs/14-logging-standard.md](./docs/14-logging-standard.md) — 로그 표준 필드, pino 설정
+- [docs/15-frontend-architecture.md](./docs/15-frontend-architecture.md) — 프론트엔드 아키텍처 (OpenLayers, plan/current, 폴더 구조)
+- [docs/16-frontend-usecases.md](./docs/16-frontend-usecases.md) — 프론트엔드 유즈케이스 (UC 코드)
+- [docs/17-frontend-ia.md](./docs/17-frontend-ia.md) — 프론트엔드 IA (Screen ID, Page/Layer)
+- [docs/18-insar-products.md](./docs/18-insar-products.md) — InSAR 산출물 대비 설계 (DInSAR/SBAS/PSInSAR)
+- [docs/19-frontend-scenarios.md](./docs/19-frontend-scenarios.md) — 프론트엔드 E2E 시나리오
 
 ## 한글 주석 및 커뮤니케이션
 
@@ -77,3 +82,29 @@ pnpm lint
 pnpm build
 pnpm test
 ```
+
+## 🐳 프론트엔드(`apps/web`) 변경 후 필수 절차
+
+**`apps/web` 하위 파일을 수정/추가/삭제했다면, 작업 완료 보고 전에 반드시 Docker 이미지 재생성 + 컨테이너 재기동까지 수행한다.** `pnpm dev` / `next dev`는 사용하지 않는다 (포트 충돌 및 stale HMR 방지).
+
+레포 루트(`C:\Users\USER\dev\sar-search-and-analyzer`)에서:
+
+```bash
+# 1) 이미지 재빌드 + 컨테이너 재생성 (포트 3333)
+pnpm web:docker:up            # 권장 — 호스트 LAN IP 자동 감지 후 HOST_LAN_IP 주입
+# 또는: docker compose up --build -d web  (HOST_LAN_IP 주입 없이)
+# 강제 fresh: pnpm web:docker:rebuild
+
+# 2) 헬스 확인
+docker ps --filter name=sentinel-web --format "{{.Status}}"   # (healthy) 여야 함
+curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:3333/   # 200 기대
+
+# 3) 문제 시 로그
+docker compose logs --tail=100 web
+```
+
+- 컨테이너 이름: `sentinel-web`, 이미지 태그: `sentinel/web:latest`, 포트: `3333:3333`
+- 빌드가 실패하면 원인을 수정한 뒤 다시 `docker compose up --build -d web` — 실패 상태로 "완료" 보고 금지
+- `docker compose down` / `pnpm web:docker:down`으로 정지
+- 3001/3333 포트에 `pnpm dev` 등 다른 리스너가 떠 있으면 먼저 kill 후 재기동
+- 이 규칙은 `apps/web`에만 해당. 백엔드(`apps/api`, `apps/worker`, `apps/crawler`)는 아직 컨테이너화 범위 밖.
