@@ -67,6 +67,7 @@ Node 22 LTS · pnpm 9 · NestJS 10 · TypeScript 5 · TypeORM 0.3 · PostgreSQL 
 - [docs/17-frontend-ia.md](./docs/17-frontend-ia.md) — 프론트엔드 IA (Screen ID, Page/Layer)
 - [docs/18-insar-products.md](./docs/18-insar-products.md) — InSAR 산출물 대비 설계 (DInSAR/SBAS/PSInSAR)
 - [docs/19-frontend-scenarios.md](./docs/19-frontend-scenarios.md) — 프론트엔드 E2E 시나리오
+- [docs/20-vworld-integration.md](./docs/20-vworld-integration.md) — VWorld API 통합 (주소→필지 폴리곤, SHP 업로드 대체)
 
 ## 한글 주석 및 커뮤니케이션
 

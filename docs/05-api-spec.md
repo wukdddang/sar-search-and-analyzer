@@ -388,9 +388,91 @@ WebSocket 연결. JWT를 `?token=...` 쿼리 또는 헤더로 전달.
 
 ---
 
-## 공공데이터셋 (SHP 업로드)
+## 지번/필지 조회 (VWorld API 프록시)
 
-사용자가 공공데이터포털·행안부·기상청 등에서 받은 Shapefile을 업로드해 AOI 후보로 저장. 상세 배경은 [15. 프론트엔드 아키텍처 §6](./15-frontend-architecture.md#6-공공데이터shp-업로드-플로우) 참조.
+> **기본 AOI 획득 경로** — 자세한 정책 배경은 [20. VWorld API 통합](./20-vworld-integration.md) 참조.
+
+국토지리정보원 VWorld 공개 API를 백엔드 BFF가 프록시하여, 주소 → 필지 폴리곤(GeoJSON)을 반환한다. 프론트는 VWorld 인증키를 직접 다루지 않는다.
+
+### `GET /api/v1/geo/search`
+
+**권한**: `viewer`+
+
+**Query**:
+- `q` (필수): 주소 문자열 — 지번/도로명 모두 허용
+- `type`: `parcel` (기본, 지번) | `road`
+- `limit`: 1~20 (기본 5)
+
+**응답 200**:
+```json
+{
+    "query": "동천동 484-20",
+    "candidates": [
+        {
+            "pnu": "4146510800104840020",
+            "jibun": "484-20",
+            "address": "경기도 용인시 수지구 동천동 484-20",
+            "center": [127.0812, 37.322],
+            "bbox": [127.0801, 37.3215, 127.0825, 37.3228]
+        }
+    ]
+}
+```
+
+### `GET /api/v1/geo/parcel/{pnu}`
+
+**권한**: `viewer`+
+
+PNU(19자리 필지고유번호)로 필지 폴리곤을 조회. 서버는 `geo_parcels` 캐시 테이블을 먼저 확인하고, 미스 시 VWorld `LT_C_LDREG` WFS 호출.
+
+**응답 200**:
+```json
+{
+    "pnu": "4146510800104840020",
+    "jibun": "484-20",
+    "address": "경기도 용인시 수지구 동천동 484-20",
+    "geometry": { "type": "Polygon", "coordinates": [[...]] },
+    "bbox": [127.0801, 37.3215, 127.0825, 37.3228],
+    "area_m2": 2345.6,
+    "source": "VWorld:LT_C_LDREG",
+    "fetched_at": "2026-04-24T12:30:00Z"
+}
+```
+
+**에러**:
+- `404 PARCEL_NOT_FOUND` — PNU 해당 필지 없음
+- `429 VWORLD_QUOTA_EXHAUSTED` — 일일 호출 한도 초과 (캐시 히트만 응답)
+- `503 VWORLD_UPSTREAM_DOWN` — VWorld 장애, 캐시 미스
+
+### `POST /api/v1/aois/from-parcel`
+
+**권한**: `viewer`+
+
+PNU 폴리곤을 사용자 AOI로 저장.
+
+**Body**:
+```json
+{
+    "pnu": "4146510800104840020",
+    "name": "용인 동천동 484-20"
+}
+```
+
+**응답 201**: 기존 AOI 생성 응답과 동일 형태 + `source: "vworld:parcel"`.
+
+### `POST /api/v1/aois/from-parcels`
+
+여러 PNU → 단일 multi-polygon AOI 또는 개별 폴리곤 묶음으로 저장(`merge: true|false`).
+
+---
+
+## 공공데이터셋 (SHP 업로드) — DEPRECATED
+
+> **1차 스프린트 범위에서 제외.** 연속지적도(LT_C_LDREG) 데이터는 VWorld API로 대체되었으며 ([20. VWorld API 통합](./20-vworld-integration.md)), SHP 업로드 경로는 비지적 경계(기상청 특보 영역, 행안부 특수 행정구역 등)가 필요할 때만 재개한다.
+>
+> 아래 스펙은 향후 보조 경로 재도입 시 참고용으로 보존.
+
+사용자가 공공데이터포털·행안부·기상청 등에서 받은 Shapefile을 업로드해 AOI 후보로 저장. 상세 배경은 [15. 프론트엔드 아키텍처 §6](./15-frontend-architecture.md#6-공공데이터shp-업로드-플로우-deprecated) 참조.
 
 ### `POST /public-datasets`
 
