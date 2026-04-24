@@ -1,0 +1,34 @@
+{
+    "name": "sentinel-platform",
+    "version": "0.1.0",
+    "private": true,
+    "description": "Sentinel 데이터 플랫폼 모노레포 루트",
+    "packageManager": "pnpm@9.15.0",
+    "engines": {
+        "node": ">=22.11.0",
+        "pnpm": ">=9.0.0"
+    },
+    "scripts": {
+        "web:dev": "pnpm --filter @sentinel/web dev",
+        "web:build": "pnpm --filter @sentinel/web build",
+        "web:lint": "pnpm --filter @sentinel/web lint",
+        "lint": "pnpm -r --parallel lint",
+        "build": "pnpm -r build",
+        "test": "pnpm -r test",
+        "web:docker:up": "node scripts/docker-up.mjs",
+        "web:docker:up:raw": "docker compose up --build -d web",
+        "web:docker:down": "docker compose down",
+        "web:docker:logs": "docker compose logs -f web",
+        "web:docker:rebuild": "docker compose up --build -d --force-recreate web"
+    },
+    "devDependencies": {
+        "prettier": "^3.3.3",
+        "typescript": "^5.6.3"
+    },
+    "prettier": {
+        "singleQuote": true,
+        "trailingComma": "all",
+        "printWidth": 120,
+        "tabWidth": 4
+    }
+}

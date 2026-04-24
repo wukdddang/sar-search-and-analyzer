@@ -1,0 +1,20 @@
+# Build context exclusions (matches repo root since docker-compose uses `context: .`)
+**/node_modules
+**/.next
+**/.turbo
+**/dist
+**/build
+**/out
+**/coverage
+**/.git
+**/.env
+**/.env.local
+**/.env.*.local
+**/*.log
+**/.DS_Store
+**/Thumbs.db
+**/*.tsbuildinfo
+**/next-env.d.ts
+.claude/
+.idea/
+.vscode/

@@ -1,0 +1,33 @@
+# Sentinel 데이터 플랫폼 — 개발/검증용 컴포즈
+#
+# 사용:
+#   docker compose up --build -d web     # 이미지 재생성 후 재실행
+#   docker compose logs -f web           # 로그 추적
+#   docker compose down                  # 정지
+#
+# 코드 수정 → 이미지 재빌드가 필요한 모델이다(HMR 아님).
+# 자세한 워크플로우는 프로젝트 메모리(`memory/workflow_docker.md`) 참고.
+
+services:
+    web:
+        build:
+            context: .
+            dockerfile: apps/web/Dockerfile
+        image: sentinel/web:latest
+        container_name: sentinel-web
+        restart: unless-stopped
+        ports:
+            - '3333:3333'
+        environment:
+            NODE_ENV: production
+            PORT: '3333'
+            HOSTNAME: 0.0.0.0
+            NEXT_TELEMETRY_DISABLED: '1'
+            # 호스트 LAN IP (예: 192.168.10.42). `pnpm web:docker:up` 래퍼가 자동 주입한다.
+            HOST_LAN_IP: ${HOST_LAN_IP:-}
+        healthcheck:
+            test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3333/']
+            interval: 15s
+            timeout: 3s
+            retries: 5
+            start_period: 10s
