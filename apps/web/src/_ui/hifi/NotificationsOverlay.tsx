@@ -36,18 +36,9 @@ const SEED: Notification[] = [
         icon: 'download',
     },
     {
-        id: 'n-8820',
-        title: '승인 대기',
-        body: '120건 다운로드 요청이 관리자 승인을 기다리고 있습니다.',
-        tone: 'warning',
-        time: '18분 전',
-        read: false,
-        icon: 'shield',
-    },
-    {
         id: 'n-8819',
-        title: 'ESA 504 오류',
-        body: 'job-58805가 ESA 카탈로그 504 Gateway Timeout으로 실패했습니다. 재시도를 권장합니다.',
+        title: 'CDSE 504 오류',
+        body: 'job-58805가 CDSE 카탈로그 504 Gateway Timeout으로 실패했습니다. 재시도를 권장합니다.',
         tone: 'danger',
         time: '1시간 전',
         read: false,
@@ -61,15 +52,6 @@ const SEED: Notification[] = [
         time: '3시간 전',
         read: true,
         icon: 'satellite',
-    },
-    {
-        id: 'n-8810',
-        title: '쿼터 75% 도달',
-        body: '오늘 다운로드 쿼터 37.5 / 50 GB. 남은 용량에 유의하세요.',
-        tone: 'warning',
-        time: '오늘 09:10',
-        read: true,
-        icon: 'activity',
     },
 ];
 

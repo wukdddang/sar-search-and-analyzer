@@ -41,7 +41,7 @@ const EVENTS: [string, string, string, string][] = [
     ['09:41:48', 'SYNC', 'success', 'Pohang_coast · 6 new scenes'],
     ['09:41:33', 'LOGIN', 'success', 'choi@ksit.re.kr'],
     ['09:40:55', 'DOWNLOAD', 'running', 'job-58821 · S1A_IW_GRDH_20260418 · 67%'],
-    ['09:40:12', 'DOWNLOAD', 'failed', 'job-58805 · ESA 504 · 재시도 예약'],
+    ['09:40:12', 'DOWNLOAD', 'failed', 'job-58805 · CDSE 504 · 재시도 예약'],
     ['09:39:28', 'CART', 'submit', '32 scenes · 58.3 GB · lee@labs.kr'],
     ['09:38:14', 'SYNC', 'success', 'Gyeongju · 2 new scenes'],
 ];

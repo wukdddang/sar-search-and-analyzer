@@ -1,8 +1,19 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import {
+    CartesianGrid,
+    Legend,
+    Line,
+    LineChart,
+    ReferenceLine,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
+} from 'recharts';
 
-import { Icon, MapCanvas, PageHeader, useToast, type MapPoint } from '@/_ui/hifi';
+import { Icon, MapCanvas, Modal, PageHeader, Quicklook, useToast, type MapPoint } from '@/_ui/hifi';
 
 interface InsarProduct {
     id: string;
@@ -70,6 +81,54 @@ const PRODUCTS: InsarProduct[] = [
 
 const POINT_COLORS = ['#dc2626', '#2563eb', '#10b981', '#f59e0b', '#a855f7', '#06b6d4', '#f472b6', '#84cc16'];
 
+const TIMESERIES_DATES = [
+    '25-10',
+    '25-11',
+    '25-12',
+    '26-01',
+    '26-02',
+    '26-03',
+    '26-04',
+    '26-05',
+    '26-06',
+    '26-07',
+    '26-08',
+    '26-09',
+];
+
+interface SceneItem {
+    id: string;
+    date: string;
+    role: 'master' | 'slave';
+    polarization: string;
+    size: string;
+}
+
+function generateScenes(product: InsarProduct): SceneItem[] {
+    const [startStr] = product.range.split(' ~ ');
+    const start = startStr.length >= 10 ? new Date(startStr) : new Date(`${startStr}-01`);
+    const stepDays = 12;
+    const polarization = 'VV+VH';
+    const sceneSize = product.type === 'PSInSAR' || product.type === 'SBAS' ? '4.1 GB' : '1.7 GB';
+    const missionPrefix = product.mission.includes('S1C') ? 'S1C' : 'S1A';
+    const productSuffix = product.type === 'DInSAR' ? 'GRDH_1SDV' : 'SLC__1SDV';
+    return Array.from({ length: product.scenes }).map((_, i) => {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i * stepDays);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        const id = `${missionPrefix}_IW_${productSuffix}_${yyyy}${mm}${dd}T211515_${yyyy}${mm}${dd}T211544_0${(i % 9) + 1}A123_2B${(i % 16).toString(16).padStart(2, '0').toUpperCase()}`;
+        return {
+            id,
+            date: `${yyyy}-${mm}-${dd}`,
+            role: i === 0 ? 'master' : 'slave',
+            polarization,
+            size: sceneSize,
+        };
+    });
+}
+
 function simulateSeries(seed: number, len = 12): number[] {
     let s = seed;
     const out = [0];
@@ -136,6 +195,7 @@ export default function InsarPage() {
         { id: 'B', lon: 129.42, lat: 36.04, color: '#2563eb', series: simulateSeries(7) },
         { id: 'C', lon: 129.38, lat: 35.98, color: '#10b981', series: simulateSeries(5) },
     ]);
+    const [showScenes, setShowScenes] = useState(false);
 
     const product = useMemo(() => PRODUCTS.find((p) => p.id === selected) ?? PRODUCTS[0]!, [selected]);
     const filtered = PRODUCTS.filter((p) => typeFilter === '전체' || p.type === typeFilter);
@@ -287,7 +347,7 @@ export default function InsarPage() {
                             <button
                                 type="button"
                                 className="btn btn--sm"
-                                onClick={() => toast(`원본 scene ${product.scenes}개 열기`)}
+                                onClick={() => setShowScenes(true)}
                             >
                                 원본 scene ({product.scenes})
                             </button>
@@ -576,71 +636,130 @@ export default function InsarPage() {
                     </div>
                 </div>
             </div>
+            {showScenes ? (
+                <ScenesModal product={product} onClose={() => setShowScenes(false)} />
+            ) : null}
         </div>
     );
 }
 
 function TimeseriesChart({ points }: { points: Point[] }) {
+    const data = TIMESERIES_DATES.map((date, i) => {
+        const row: Record<string, number | string> = { date };
+        points.forEach((p) => {
+            const v = p.series[i];
+            if (typeof v === 'number') row[p.id] = v;
+        });
+        return row;
+    });
+
     return (
-        <svg viewBox="0 0 800 160" width="100%" height="170" preserveAspectRatio="none">
-            {[0, 1, 2, 3, 4].map((i) => (
-                <line
-                    key={'g' + i}
-                    x1="40"
-                    y1={20 + i * 30}
-                    x2="790"
-                    y2={20 + i * 30}
-                    stroke="var(--border-subtle)"
-                    strokeWidth="0.8"
+        <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
+                <CartesianGrid stroke="var(--border-subtle)" strokeDasharray="3 3" />
+                <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10, fill: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}
+                    stroke="var(--border-default)"
                 />
-            ))}
-            <line x1="40" y1="80" x2="790" y2="80" stroke="var(--border-default)" strokeDasharray="3 3" />
-            {points.map((p) => {
-                const step = 750 / (p.series.length - 1);
-                const d = p.series.map((v, i) => `${i === 0 ? 'M' : 'L'} ${40 + i * step},${80 - v * 2}`).join(' ');
-                return (
-                    <g key={p.id}>
-                        <path
-                            d={d}
-                            stroke={p.color}
-                            strokeWidth="1.8"
-                            fill="none"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        />
-                        {p.series.map((v, i) => (
-                            <circle key={i} cx={40 + i * step} cy={80 - v * 2} r="2.5" fill={p.color} />
+                <YAxis
+                    width={40}
+                    tick={{ fontSize: 10, fill: 'var(--text-tertiary)', fontFamily: 'var(--font-mono)' }}
+                    stroke="var(--border-default)"
+                    label={{
+                        value: 'mm',
+                        angle: 0,
+                        position: 'insideTopLeft',
+                        offset: -2,
+                        style: { fontSize: 10, fill: 'var(--text-tertiary)' },
+                    }}
+                />
+                <Tooltip
+                    contentStyle={{
+                        background: 'var(--bg-2)',
+                        border: '1px solid var(--border-default)',
+                        borderRadius: 6,
+                        fontSize: 12,
+                    }}
+                    labelStyle={{ color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}
+                    itemStyle={{ fontFamily: 'var(--font-mono)' }}
+                    formatter={(value) => [
+                        typeof value === 'number' ? `${value.toFixed(1)} mm` : String(value),
+                        '',
+                    ]}
+                />
+                <Legend wrapperStyle={{ fontSize: 11 }} iconSize={10} />
+                <ReferenceLine y={0} stroke="var(--border-default)" strokeDasharray="3 3" />
+                {points.map((p) => (
+                    <Line
+                        key={p.id}
+                        type="monotone"
+                        dataKey={p.id}
+                        stroke={p.color}
+                        strokeWidth={1.8}
+                        dot={{ r: 2.5, fill: p.color, strokeWidth: 0 }}
+                        activeDot={{ r: 4 }}
+                        isAnimationActive={false}
+                    />
+                ))}
+            </LineChart>
+        </ResponsiveContainer>
+    );
+}
+
+function ScenesModal({ product, onClose }: { product: InsarProduct; onClose: () => void }) {
+    const scenes = useMemo(() => generateScenes(product), [product]);
+    return (
+        <Modal
+            title={`원본 scene 목록 — ${product.name}`}
+            sub={`${product.type} · ${product.mission} · ${product.range} · ${scenes.length} scenes`}
+            size="xl"
+            onClose={onClose}
+        >
+            <div style={{ maxHeight: '60vh', overflow: 'auto' }}>
+                <table className="table">
+                    <thead>
+                        <tr>
+                            <th style={{ width: 56 }}>미리보기</th>
+                            <th>Scene ID</th>
+                            <th style={{ width: 110 }}>관측일</th>
+                            <th style={{ width: 80 }}>역할</th>
+                            <th style={{ width: 90 }}>편파</th>
+                            <th className="num" style={{ width: 90 }}>용량</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {scenes.map((s) => (
+                            <tr key={s.id}>
+                                <td>
+                                    <Quicklook sceneId={s.id} size={42} />
+                                </td>
+                                <td>
+                                    <div className="mono truncate" style={{ fontSize: 11.5, maxWidth: 460 }}>
+                                        {s.id}
+                                    </div>
+                                </td>
+                                <td className="mono tabular faint" style={{ fontSize: 12 }}>
+                                    {s.date}
+                                </td>
+                                <td>
+                                    <span
+                                        className={`badge ${s.role === 'master' ? 'badge--brand2' : 'badge--neutral'}`}
+                                    >
+                                        {s.role}
+                                    </span>
+                                </td>
+                                <td className="mono tabular faint" style={{ fontSize: 12 }}>
+                                    {s.polarization}
+                                </td>
+                                <td className="num tabular mono" style={{ fontSize: 12 }}>
+                                    {s.size}
+                                </td>
+                            </tr>
                         ))}
-                    </g>
-                );
-            })}
-            {[-20, -10, 0, 10, 20].map((v, i) => (
-                <text
-                    key={v}
-                    x="8"
-                    y={144 - i * 30}
-                    fontSize="10"
-                    fill="var(--text-tertiary)"
-                    fontFamily="var(--font-mono)"
-                >
-                    {v > 0 ? '+' + v : v}
-                </text>
-            ))}
-            <text x="4" y="14" fontSize="10" fill="var(--text-tertiary)" fontFamily="var(--font-sans)">
-                mm
-            </text>
-            {['25-10', '25-11', '25-12', '26-01', '26-02', '26-03'].map((t, i) => (
-                <text
-                    key={t}
-                    x={50 + i * 140}
-                    y="156"
-                    fontSize="10"
-                    fill="var(--text-tertiary)"
-                    fontFamily="var(--font-mono)"
-                >
-                    {t}
-                </text>
-            ))}
-        </svg>
+                    </tbody>
+                </table>
+            </div>
+        </Modal>
     );
 }

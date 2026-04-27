@@ -6,8 +6,10 @@ import Feature from 'ol/Feature';
 import type { Coordinate } from 'ol/coordinate';
 import { boundingExtent } from 'ol/extent';
 import GeoJSON from 'ol/format/GeoJSON';
-import { Point, Polygon } from 'ol/geom';
+import { MultiPoint, Point, Polygon } from 'ol/geom';
 import Draw, { createBox } from 'ol/interaction/Draw';
+import Modify from 'ol/interaction/Modify';
+import Translate from 'ol/interaction/Translate';
 import TileLayer from 'ol/layer/Tile';
 import VectorLayer from 'ol/layer/Vector';
 import Map from 'ol/Map';
@@ -63,6 +65,8 @@ interface Props {
     style?: CSSProperties;
     onToolSelect?: (tool: MapTool) => void;
     activeTool?: MapTool;
+    /** 노출할 그리기 도구 목록. 미지정 시 polygon/bbox/upload 모두 표시. */
+    tools?: ReadonlyArray<MapTool>;
     /** Initial center in lon/lat (EPSG:4326). Default = Pohang (129.37, 36.02) */
     center?: [number, number];
     /** Initial zoom. Default = 9 */
@@ -78,6 +82,8 @@ interface Props {
     onDrawEnd?: (tool: MapTool, geojson: DrawnGeometry) => void;
     /** Raw map click (lon/lat). Fires only when no draw tool is active. */
     onMapClick?: (coord: [number, number]) => void;
+    /** AOI를 모디파이/이동(translate) 가능하게 하고, 변경 시 호출. 미지정 시 AOI 비편집. */
+    onAoiChange?: (coords: Array<[number, number]>) => void;
     /** Default basemap. Can be toggled by the user unless `showBasemapSwitch` is false. */
     basemap?: Basemap;
     /** Show the OSM ↔ Satellite basemap toggle. Default true. */
@@ -174,6 +180,7 @@ export function MapCanvas({
     style = {},
     onToolSelect,
     activeTool,
+    tools,
     center = [129.37, 36.02],
     zoom = 9,
     footprints,
@@ -181,6 +188,7 @@ export function MapCanvas({
     points,
     onDrawEnd,
     onMapClick,
+    onAoiChange,
     basemap: initialBasemap = 'osm',
     showBasemapSwitch = true,
     interactive = true,
@@ -196,11 +204,15 @@ export function MapCanvas({
     const drawSourceRef = useRef<VectorSource | null>(null);
     const pointSourceRef = useRef<VectorSource | null>(null);
     const drawInteractionRef = useRef<Draw | null>(null);
+    const modifyInteractionRef = useRef<Modify | null>(null);
+    const translateInteractionRef = useRef<Translate | null>(null);
     // Latest callbacks in refs so event handlers don't need to rebind.
     const onDrawEndRef = useRef(onDrawEnd);
     const onMapClickRef = useRef(onMapClick);
+    const onAoiChangeRef = useRef(onAoiChange);
     onDrawEndRef.current = onDrawEnd;
     onMapClickRef.current = onMapClick;
+    onAoiChangeRef.current = onAoiChange;
 
     // Initialize map once
     useEffect(() => {
@@ -240,7 +252,41 @@ export function MapCanvas({
                 }),
                 new VectorLayer({
                     source: aoiSource,
-                    style: makeFootprintStyle('aoi', false, undefined),
+                    style: (feature) => {
+                        const c = COLORS.aoi;
+                        const editable = Boolean(onAoiChangeRef.current);
+                        const styles: Style[] = [
+                            new Style({
+                                stroke: new Stroke({
+                                    color: c.stroke,
+                                    width: editable ? 2.5 : 1.5,
+                                    lineDash: [6, 4],
+                                }),
+                                fill: new Fill({ color: c.fill }),
+                            }),
+                        ];
+                        if (editable) {
+                            styles.push(
+                                new Style({
+                                    image: new Circle({
+                                        radius: 6,
+                                        fill: new Fill({ color: '#ffffff' }),
+                                        stroke: new Stroke({ color: c.stroke, width: 2 }),
+                                    }),
+                                    geometry: (f) => {
+                                        const geom = f.getGeometry();
+                                        if (!geom || geom.getType() !== 'Polygon') return undefined;
+                                        const ring = (geom as Polygon).getCoordinates()[0];
+                                        if (!ring || ring.length === 0) return undefined;
+                                        // Polygon ring is closed (last == first); strip the duplicate.
+                                        const corners = ring.slice(0, -1);
+                                        return new MultiPoint(corners);
+                                    },
+                                }),
+                            );
+                        }
+                        return styles;
+                    },
                 }),
                 new VectorLayer({
                     source: drawSource,
@@ -264,7 +310,26 @@ export function MapCanvas({
         });
 
         // Click → footprint.onClick / point.onClick / onMapClick
-        map.on('singleclick', (evt) => {
+        // 'click' 사용: 'singleclick'은 dblclick과 구분하려고 ~250ms 지연되어 모달이 늦게 뜬다.
+        map.on('click', (evt) => {
+            // AOI가 편집 가능하면, AOI 위 클릭은 AOI 인터랙션(Translate/Modify)에 양보 —
+            // 뒤에 깔린 풋프린트의 onClick이 발화되지 않도록 차단한다.
+            if (onAoiChangeRef.current) {
+                let aoiHit = false;
+                map.forEachFeatureAtPixel(
+                    evt.pixel,
+                    (feature) => {
+                        if (feature.get('kind') === 'aoi') {
+                            aoiHit = true;
+                            return true;
+                        }
+                        return undefined;
+                    },
+                    { hitTolerance: 4 },
+                );
+                if (aoiHit) return;
+            }
+
             let handled = false;
             map.forEachFeatureAtPixel(
                 evt.pixel,
@@ -371,6 +436,207 @@ export function MapCanvas({
         baseLayerRef.current = newLayer;
     }, [basemap]);
 
+    // AOI 편집 인터랙션 (Modify + Translate). 콜백이 있을 때만 부착.
+    useEffect(() => {
+        const map = mapRef.current;
+        const aoiSource = aoiSourceRef.current;
+        if (!map || !aoiSource) return;
+        if (!onAoiChange) return;
+
+        const readRing = (feature: Feature): Array<[number, number]> | null => {
+            const geom = feature.getGeometry();
+            if (!geom || geom.getType() !== 'Polygon') return null;
+            const polygon = geom as Polygon;
+            const ring3857 = polygon.getCoordinates()[0];
+            if (!ring3857) return null;
+            return ring3857.map((c) => {
+                const [lon, lat] = toLonLat(c);
+                return [lon, lat] as [number, number];
+            });
+        };
+
+        // 4-코너 ring([NW,NE,SE,SW,NW]) 표준 정규화. 드래그 종료 후 다음 드래그가
+        // 일관된 인덱스 의미(0=NW, 2=SE)로 시작하도록.
+        const normalizeBboxRing = (ring: Array<[number, number]>): Array<[number, number]> => {
+            let minLon = Infinity;
+            let maxLon = -Infinity;
+            let minLat = Infinity;
+            let maxLat = -Infinity;
+            for (const [lo, la] of ring) {
+                if (lo < minLon) minLon = lo;
+                if (lo > maxLon) maxLon = lo;
+                if (la < minLat) minLat = la;
+                if (la > maxLat) maxLat = la;
+            }
+            return [
+                [minLon, maxLat],
+                [maxLon, maxLat],
+                [maxLon, minLat],
+                [minLon, minLat],
+                [minLon, maxLat],
+            ];
+        };
+
+        // cursor 가 인덱스 movedIdx 에, anchor(대각)가 (movedIdx+2)%4 에 위치하는 직사각형 ring 을
+        // 만든다. Modify 가 드래그하는 vertex 가 ring 에서 같은 인덱스를 유지해야 핸들이 커서를
+        // 따라가므로, bbox 좌표를 인덱스에 단순 정렬(NW/NE/SE/SW)하지 않고 이렇게 회전시켜 배치한다.
+        const buildRectangleRing = (
+            cursor: [number, number],
+            anchor: [number, number],
+            movedIdx: number,
+        ): Array<[number, number]> => {
+            // 원래 ring 이 [NW,NE,SE,SW] 표준 순서일 때 인접 vertex 와 공유하는 축:
+            //   0(NW)↔1(NE) 같은 lat / 0(NW)↔3(SW) 같은 lon — 즉 짝수 인덱스의 +1 이웃은 같은 lat.
+            const sharedLat: [number, number] = [anchor[0], cursor[1]]; // cursor 와 같은 lat
+            const sharedLon: [number, number] = [cursor[0], anchor[1]]; // cursor 와 같은 lon
+            const r: Array<[number, number]> = [cursor, cursor, cursor, cursor];
+            r[movedIdx] = cursor;
+            r[(movedIdx + 2) % 4] = anchor;
+            if (movedIdx % 2 === 0) {
+                r[(movedIdx + 1) % 4] = sharedLat;
+                r[(movedIdx + 3) % 4] = sharedLon;
+            } else {
+                r[(movedIdx + 1) % 4] = sharedLon;
+                r[(movedIdx + 3) % 4] = sharedLat;
+            }
+            return [r[0]!, r[1]!, r[2]!, r[3]!, r[0]!];
+        };
+
+        let beforeModifyRing: Array<[number, number]> | null = null;
+        let activeFeature: Feature | null = null;
+        let movedCornerIdx: number | null = null;
+        let suppressGeomChange = false;
+
+        // 드래그 중 폴리곤이 사다리꼴을 거치지 않고 항상 직사각형을 유지하도록,
+        // geometry change 마다 cursor/anchor 로 bbox 를 재구성해 즉시 setCoordinates 로 덮어쓴다.
+        // 어떤 vertex 가 드래그되는지(movedCornerIdx)는 첫 변경 이벤트에서 한 번 결정한 뒤
+        // 드래그 종료까지 고정 — 사용자가 대각선을 넘겨 끌어도 핸들이 같은 인덱스에 머무르도록.
+        const onGeomChange = () => {
+            if (suppressGeomChange || !activeFeature || !beforeModifyRing) return;
+            const geom = activeFeature.getGeometry();
+            if (!geom || geom.getType() !== 'Polygon') return;
+            const polygon = geom as Polygon;
+            const ring3857 = polygon.getCoordinates()[0];
+            if (!ring3857 || ring3857.length < 4) return;
+            const ringLonLat: Array<[number, number]> = ring3857.map((c) => {
+                const [lon, lat] = toLonLat(c);
+                return [lon, lat];
+            });
+
+            if (movedCornerIdx === null) {
+                let maxD = -1;
+                let idx = 0;
+                for (let i = 0; i < 4; i++) {
+                    const a = ringLonLat[i]!;
+                    const b = beforeModifyRing[i]!;
+                    const d = (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+                    if (d > maxD) {
+                        maxD = d;
+                        idx = i;
+                    }
+                }
+                if (maxD <= 0) return; // 변동 없음 — 인덱스 락 보류.
+                movedCornerIdx = idx;
+            }
+
+            const cursor = ringLonLat[movedCornerIdx]!;
+            const anchor = beforeModifyRing[(movedCornerIdx + 2) % 4]!;
+            const nextLonLat = buildRectangleRing(cursor, anchor, movedCornerIdx);
+            const next3857 = nextLonLat.map(([lo, la]) => fromLonLat([lo, la]));
+
+            let same = next3857.length === ring3857.length;
+            if (same) {
+                for (let i = 0; i < next3857.length; i++) {
+                    const a = next3857[i]!;
+                    const b = ring3857[i]!;
+                    if (Math.abs(a[0] - b[0]) > 1e-3 || Math.abs(a[1] - b[1]) > 1e-3) {
+                        same = false;
+                        break;
+                    }
+                }
+            }
+            if (same) return;
+            suppressGeomChange = true;
+            polygon.setCoordinates([next3857]);
+            suppressGeomChange = false;
+        };
+
+        const modify = new Modify({
+            source: aoiSource,
+            // 변(edge) 중간을 클릭해 새 정점을 끼워 넣는 동작 비활성 — 사각형 유지.
+            insertVertexCondition: () => false,
+        });
+        modify.on('modifystart', (evt) => {
+            const f = evt.features.getArray()[0] as Feature | undefined;
+            if (!f) return;
+            activeFeature = f;
+            beforeModifyRing = readRing(f);
+            movedCornerIdx = null;
+            f.getGeometry()?.on('change', onGeomChange);
+        });
+        modify.on('modifyend', (evt) => {
+            const f = evt.features.getArray()[0] as Feature | undefined;
+            if (activeFeature) {
+                activeFeature.getGeometry()?.un('change', onGeomChange);
+            }
+            activeFeature = null;
+            movedCornerIdx = null;
+            if (!f) {
+                beforeModifyRing = null;
+                return;
+            }
+            const ring = readRing(f);
+            beforeModifyRing = null;
+            if (!ring) return;
+            // 다음 드래그가 [NW,NE,SE,SW] 표준 인덱스로 시작하도록 정규화해서 부모로 전달.
+            onAoiChangeRef.current?.(normalizeBboxRing(ring));
+        });
+
+        const translate = new Translate({
+            filter: (feature) => feature.get('kind') === 'aoi',
+        });
+        translate.on('translateend', (evt) => {
+            const f = evt.features.getArray()[0] as Feature | undefined;
+            if (!f) return;
+            const ring = readRing(f);
+            if (!ring) return;
+            // 이동만 한 경우 bbox 그대로 정규화.
+            let minLon = Infinity;
+            let maxLon = -Infinity;
+            let minLat = Infinity;
+            let maxLat = -Infinity;
+            for (const [lo, la] of ring) {
+                if (lo < minLon) minLon = lo;
+                if (lo > maxLon) maxLon = lo;
+                if (la < minLat) minLat = la;
+                if (la > maxLat) maxLat = la;
+            }
+            onAoiChangeRef.current?.([
+                [minLon, maxLat],
+                [maxLon, maxLat],
+                [maxLon, minLat],
+                [minLon, minLat],
+                [minLon, maxLat],
+            ]);
+        });
+
+        // 추가 순서 주의: OpenLayers 는 마지막에 추가된 인터랙션을 먼저 처리한다.
+        // Modify 가 먼저 이벤트를 받아서 vertex 위에서는 핸들을 잡고, vertex 가 아닌 곳에서만
+        // Translate 로 흘러가도록 translate → modify 순으로 등록.
+        map.addInteraction(translate);
+        map.addInteraction(modify);
+        modifyInteractionRef.current = modify;
+        translateInteractionRef.current = translate;
+
+        return () => {
+            map.removeInteraction(modify);
+            map.removeInteraction(translate);
+            if (modifyInteractionRef.current === modify) modifyInteractionRef.current = null;
+            if (translateInteractionRef.current === translate)
+                translateInteractionRef.current = null;
+        };
+    }, [onAoiChange]);
+
     // Swap draw interaction when activeTool changes
     useEffect(() => {
         const map = mapRef.current;
@@ -455,7 +721,7 @@ export function MapCanvas({
             {children}
             {interactive && onToolSelect ? (
                 <div className="map-tools">
-                    {TOOLS.map(([ic, k, t]) => (
+                    {TOOLS.filter(([, k]) => !tools || tools.includes(k)).map(([ic, k, t]) => (
                         <button
                             key={k}
                             type="button"

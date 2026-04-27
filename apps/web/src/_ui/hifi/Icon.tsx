@@ -31,6 +31,7 @@ export type IconName =
     | 'upload'
     | 'sun'
     | 'moon'
+    | 'info'
     | 'logout';
 
 const SW = 1.75 as const;
@@ -220,6 +221,13 @@ const ICONS: Record<IconName, (p: Props) => React.ReactElement> = {
         </>,
     ),
     moon: wrap(<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />),
+    info: wrap(
+        <>
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" x2="12" y1="16" y2="12" />
+            <line x1="12" x2="12.01" y1="8" y2="8" />
+        </>,
+    ),
     logout: wrap(
         <>
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />

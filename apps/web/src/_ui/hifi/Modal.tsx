@@ -8,7 +8,8 @@ interface ModalProps {
     title: ReactNode;
     sub?: ReactNode;
     children?: ReactNode;
-    footer?: ReactNode;
+    /** ReactNode — 그대로 렌더. 함수 — `close()`(애니메이션 후 onClose)를 인자로 받는 render prop. */
+    footer?: ReactNode | ((close: () => void) => ReactNode);
     onClose: () => void;
     size?: 'default' | 'lg' | 'xl';
 }
@@ -49,7 +50,11 @@ export function Modal({ title, sub, children, footer, onClose, size = 'default' 
                     </div>
                 </div>
                 <div className="modal__body">{children}</div>
-                {footer ? <div className="modal__footer">{footer}</div> : null}
+                {footer ? (
+                    <div className="modal__footer">
+                        {typeof footer === 'function' ? footer(requestClose) : footer}
+                    </div>
+                ) : null}
             </div>
         </div>
     );

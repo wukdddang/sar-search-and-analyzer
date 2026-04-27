@@ -18,7 +18,6 @@ export default function CartPage() {
         setSel((prev) => new Set([...prev].filter((id) => cart.some((s) => s.id === id))));
     }, [cart]);
 
-    const overQuota = cart.length > 100;
     const allChecked = cart.length > 0 && sel.size === cart.length;
 
     const toggleAll = () => (allChecked ? setSel(new Set()) : setSel(new Set(cart.map((s) => s.id))));
@@ -65,19 +64,7 @@ export default function CartPage() {
             toast('선택된 scene이 없습니다', { tone: 'warning' });
             return;
         }
-        const selected = cart.filter((s) => sel.has(s.id));
-        const selectedGb = selected.reduce((a, s) => a + parseFloat(s.size), 0);
-        if (overQuota) {
-            const ok = await confirm({
-                title: '승인 필요',
-                body: `${sel.size}건 (${selectedGb.toFixed(1)} GB) — 100건 초과로 관리자 승인이 필요합니다. 승인 요청을 제출할까요?`,
-                confirmLabel: '요청 제출',
-            });
-            if (!ok) return;
-            toast(`${sel.size}건 승인 요청 제출`, { tone: 'success', title: 'PENDING_APPROVAL' });
-        } else {
-            toast(`${sel.size}건 다운로드 큐에 추가됨`, { tone: 'success', title: '요청 완료' });
-        }
+        toast(`${sel.size}건 다운로드 큐에 추가됨`, { tone: 'success', title: '요청 완료' });
         router.push('/plan/sar/user/downloads');
     };
 
@@ -130,33 +117,9 @@ export default function CartPage() {
                         <div className="kpi__value tabular" style={{ color: 'var(--warning)' }}>
                             {needCount}
                         </div>
-                        <div className="kpi__delta">ESA → NAS 복사</div>
+                        <div className="kpi__delta">CDSE → NAS 복사</div>
                     </div>
                 </div>
-
-                {overQuota ? (
-                    <div
-                        className="card"
-                        style={{ borderColor: 'var(--warning)', background: 'var(--warning-soft)' }}
-                    >
-                        <div className="card__body row gap-3">
-                            <Icon name="shield" size={18} style={{ color: 'var(--warning)' }} />
-                            <div className="col" style={{ gap: 2, flex: 1 }}>
-                                <div style={{ fontWeight: 600 }}>대용량 요청 — 관리자 승인 필요</div>
-                                <div className="muted" style={{ fontSize: 12.5 }}>
-                                    100건을 초과하면 <b>PENDING_APPROVAL</b>로 큐에 대기합니다. 평균 승인 시간 2~4시간.
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                className="btn"
-                                onClick={() => toast('승인 정책: 100건 초과는 관리자 확인 필요')}
-                            >
-                                승인 정책 보기
-                            </button>
-                        </div>
-                    </div>
-                ) : null}
 
                 <div
                     className="card"

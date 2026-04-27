@@ -29,9 +29,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <head>
                 <link
                     rel="stylesheet"
-                    as="style"
-                    crossOrigin=""
-                    href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css"
+                    href="https://spoqa.github.io/spoqa-han-sans/css/SpoqaHanSansNeo.css"
+                />
+                <link
+                    rel="stylesheet"
+                    href="https://fonts.googleapis.com/css2?family=Ubuntu+Mono:wght@400;700&display=swap"
                 />
                 <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
             </head>

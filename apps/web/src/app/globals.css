@@ -12,10 +12,11 @@
 
 :root,
 [data-theme='dark'] {
+    /* 전체 텍스트는 Spoqa Han Sans Neo를 사용한다. */
     --font-sans:
-        'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI',
-        system-ui, 'Noto Sans KR', sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+        'Spoqa Han Sans Neo', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Segoe UI', system-ui,
+        'Noto Sans KR', sans-serif;
+    --font-mono: 'Spoqa Han Sans Neo', 'Ubuntu Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 
     /* Surface layers */
     --bg-0: #09090b;
@@ -595,6 +596,11 @@
     color: var(--accent);
     border-color: var(--accent-border);
 }
+.chip--active:hover {
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    border-color: var(--accent);
+    color: var(--accent);
+}
 .chip .chip__close {
     opacity: 0.5;
     font-size: 14px;
@@ -1152,6 +1158,12 @@
     padding: 10px;
     z-index: 40;
 }
+.daterange__pop--portal {
+    position: fixed;
+    top: auto;
+    left: auto;
+    z-index: 1000;
+}
 .daterange__head {
     display: flex;
     align-items: center;
@@ -1286,7 +1298,7 @@
 .map-stats {
     position: absolute;
     top: 12px;
-    left: 60px;
+    left: 12px;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1414,7 +1426,7 @@
     transition: background 120ms ease;
 }
 .results-header:hover {
-    background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+    background: color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 .results-header:focus-visible {
     outline: 2px solid var(--accent);
@@ -1512,6 +1524,12 @@
 [data-tooltip-pos='bottom']::after {
     top: calc(100% + 6px);
     bottom: auto;
+}
+[data-tooltip][data-tooltip-wide]::after {
+    white-space: normal;
+    width: max-content;
+    max-width: 320px;
+    line-height: 1.45;
 }
 
 /* ═════ Modal ═════ */

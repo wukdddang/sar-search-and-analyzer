@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import { Icon } from './Icon';
 
@@ -47,13 +48,22 @@ export function DateRangePicker({ start, end, onChange, maxDate, minDate }: Prop
     const [viewMonth, setViewMonth] = useState<Date>(() => startOfMonth(start));
     const [hovered, setHovered] = useState<Date | null>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
+    const popRef = useRef<HTMLDivElement>(null);
+    const [popPos, setPopPos] = useState<{ top: number; left: number } | null>(null);
+    const [mounted, setMounted] = useState(false);
 
-    // 외부 클릭/Escape로 닫기
+    useEffect(() => {
+        setMounted(true);
+    }, []);
+
+    // 외부 클릭/Escape로 닫기 (팝오버는 portal로 body에 렌더되므로 wrapper 기준 contains 판정으로는 부족)
     useEffect(() => {
         if (!open) return;
         const onDown = (e: MouseEvent) => {
-            if (!wrapperRef.current) return;
-            if (!wrapperRef.current.contains(e.target as Node)) setOpen(false);
+            const t = e.target as Node;
+            if (wrapperRef.current?.contains(t)) return;
+            if (popRef.current?.contains(t)) return;
+            setOpen(false);
         };
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') setOpen(false);
@@ -63,6 +73,27 @@ export function DateRangePicker({ start, end, onChange, maxDate, minDate }: Prop
         return () => {
             document.removeEventListener('mousedown', onDown);
             document.removeEventListener('keydown', onKey);
+        };
+    }, [open]);
+
+    // 트리거 위치에 맞춰 팝오버 좌표 계산. 스크롤/리사이즈에도 따라감.
+    useLayoutEffect(() => {
+        if (!open) return;
+        const compute = () => {
+            const rect = wrapperRef.current?.getBoundingClientRect();
+            if (!rect) return;
+            const POP_W = 288;
+            const viewportW = window.innerWidth;
+            let left = rect.left;
+            if (left + POP_W > viewportW - 8) left = Math.max(8, viewportW - POP_W - 8);
+            setPopPos({ top: rect.bottom + 6, left });
+        };
+        compute();
+        window.addEventListener('resize', compute);
+        window.addEventListener('scroll', compute, true);
+        return () => {
+            window.removeEventListener('resize', compute);
+            window.removeEventListener('scroll', compute, true);
         };
     }, [open]);
 
@@ -129,7 +160,7 @@ export function DateRangePicker({ start, end, onChange, maxDate, minDate }: Prop
 
     return (
         <div ref={wrapperRef} className="daterange" style={{ position: 'relative' }}>
-            <div className="input-group">
+            <div className="row gap-2" style={{ alignItems: 'stretch' }}>
                 <button
                     type="button"
                     className={`input mono tabular daterange__trigger${focus === 'start' && open ? ' daterange__trigger--active' : ''}`}
@@ -151,9 +182,16 @@ export function DateRangePicker({ start, end, onChange, maxDate, minDate }: Prop
                 </button>
             </div>
 
-            {open ? (
-                <div className="daterange__pop" role="dialog" aria-label="날짜 범위 선택">
-                    <div className="daterange__head">
+            {open && mounted && popPos
+                ? createPortal(
+                      <div
+                          ref={popRef}
+                          className="daterange__pop daterange__pop--portal"
+                          role="dialog"
+                          aria-label="날짜 범위 선택"
+                          style={{ top: popPos.top, left: popPos.left }}
+                      >
+                          <div className="daterange__head">
                         <button
                             type="button"
                             className="daterange__nav"
@@ -233,8 +271,10 @@ export function DateRangePicker({ start, end, onChange, maxDate, minDate }: Prop
                             닫기
                         </button>
                     </div>
-                </div>
-            ) : null}
+                      </div>,
+                      document.body,
+                  )
+                : null}
         </div>
     );
 }

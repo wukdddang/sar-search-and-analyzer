@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-import { Icon, PageHeader, useConfirm, useToast } from '@/_ui/hifi';
+import { Icon, PageHeader, Quicklook, useConfirm, useToast } from '@/_ui/hifi';
 
-type JobStatus = 'running' | 'queued' | 'done' | 'failed' | 'pending';
+type JobStatus = 'running' | 'queued' | 'done' | 'failed';
 
 interface Job {
     id: string;
@@ -13,26 +13,34 @@ interface Job {
     progress: number;
     size: string;
     started: string;
+    finished: string;
     eta: string;
     user: string;
 }
 
 const INITIAL_JOBS: Job[] = [
-    { id: 'job-58821', scene: 'S1A_IW_GRDH_1SDV_20260418T211515', status: 'running', progress: 67, size: '1.6 GB', started: '09:42', eta: '2분', user: '본인' },
-    { id: 'job-58820', scene: 'S1C_IW_SLC__1SDV_20260417T092258', status: 'running', progress: 34, size: '4.1 GB', started: '09:40', eta: '6분', user: '본인' },
-    { id: 'job-58819', scene: 'S1A_IW_SLC__1SDV_20260413T212030', status: 'queued', progress: 0, size: '4.3 GB', started: '—', eta: '대기', user: '본인' },
-    { id: 'job-58812', scene: 'S1A_IW_GRDH_1SDV_20260415T093105', status: 'done', progress: 100, size: '1.7 GB', started: '08:15', eta: '완료', user: '본인' },
-    { id: 'job-58810', scene: 'S1A_IW_GRDH_1SDV_20260408T211855', status: 'done', progress: 100, size: '1.7 GB', started: '08:02', eta: '완료', user: '본인' },
-    { id: 'job-58805', scene: 'S1A_IW_SLC__1SDV_20260410T092505', status: 'failed', progress: 48, size: '4.0 GB', started: '07:50', eta: 'ESA 504', user: '본인' },
-    { id: 'job-58792', scene: 'S1A_IW_GRDH_1SDV_20260405T212338', status: 'pending', progress: 0, size: '—', started: '—', eta: '승인 대기', user: '본인' },
+    { id: 'job-58821', scene: 'S1A_IW_GRDH_1SDV_20260418T211515', status: 'running', progress: 67, size: '1.6 GB', started: '2026-04-27 09:42', finished: '—', eta: '2분', user: '본인' },
+    { id: 'job-58820', scene: 'S1C_IW_SLC__1SDV_20260417T092258', status: 'running', progress: 34, size: '4.1 GB', started: '2026-04-27 09:40', finished: '—', eta: '6분', user: '본인' },
+    { id: 'job-58819', scene: 'S1A_IW_SLC__1SDV_20260413T212030', status: 'queued', progress: 0, size: '4.3 GB', started: '—', finished: '—', eta: '대기', user: '본인' },
+    { id: 'job-58812', scene: 'S1A_IW_GRDH_1SDV_20260415T093105', status: 'done', progress: 100, size: '1.7 GB', started: '2026-04-27 08:15', finished: '2026-04-27 08:21', eta: '완료', user: '본인' },
+    { id: 'job-58810', scene: 'S1A_IW_GRDH_1SDV_20260408T211855', status: 'done', progress: 100, size: '1.7 GB', started: '2026-04-27 08:02', finished: '2026-04-27 08:09', eta: '완료', user: '본인' },
+    { id: 'job-58805', scene: 'S1A_IW_SLC__1SDV_20260410T092505', status: 'failed', progress: 48, size: '4.0 GB', started: '2026-04-27 07:50', finished: '2026-04-27 07:54', eta: 'CDSE 504', user: '본인' },
 ];
+
+function formatDateTime(d: Date) {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mi = String(d.getMinutes()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
 
 const STATUS_LABEL: Record<JobStatus, string> = {
     running: '진행중',
     queued: '대기',
     done: '완료',
     failed: '실패',
-    pending: '승인 대기',
 };
 
 type FilterKey = 'all' | JobStatus;
@@ -49,7 +57,14 @@ export default function DownloadsPage() {
                 prev.map((j) => {
                     if (j.status !== 'running') return j;
                     const next = Math.min(100, j.progress + 2 + Math.floor(Math.random() * 4));
-                    if (next >= 100) return { ...j, progress: 100, status: 'done', eta: '완료' };
+                    if (next >= 100)
+                        return {
+                            ...j,
+                            progress: 100,
+                            status: 'done',
+                            eta: '완료',
+                            finished: formatDateTime(new Date()),
+                        };
                     const remaining = Math.round(((100 - next) / 6) * 0.8);
                     return { ...j, progress: next, eta: `${remaining}분` };
                 }),
@@ -71,7 +86,7 @@ export default function DownloadsPage() {
             next[idx] = {
                 ...job,
                 status: 'running',
-                started: new Date().toTimeString().slice(0, 5),
+                started: formatDateTime(new Date()),
                 progress: 3,
                 eta: '시작',
             };
@@ -86,7 +101,6 @@ export default function DownloadsPage() {
             queued: 0,
             done: 0,
             failed: 0,
-            pending: 0,
         };
         jobs.forEach((j) => {
             c[j.status]++;
@@ -120,18 +134,12 @@ export default function DownloadsPage() {
     const download = (j: Job) =>
         toast(`${j.scene.slice(0, 30)} 다운로드 시작`, { tone: 'success' });
 
-    const quotaUsed = 28.4;
-    const quotaMax = 50;
-    const pct = (quotaUsed / quotaMax) * 100;
-    const pctClass = pct > 90 ? 'progress--danger' : pct > 75 ? 'progress--warning' : '';
-
     const filterTabs: [FilterKey, string][] = [
         ['all', '전체'],
         ['running', '진행중'],
         ['queued', '대기'],
         ['done', '완료'],
         ['failed', '실패'],
-        ['pending', '승인 대기'],
     ];
 
     return (
@@ -163,35 +171,6 @@ export default function DownloadsPage() {
                         </span>
                     ))}
                 </div>
-                <div style={{ marginLeft: 'auto' }} className="row gap-3">
-                    <div
-                        className="row gap-3"
-                        style={{
-                            padding: '6px 14px',
-                            background: 'var(--bg-2)',
-                            border: '1px solid var(--border-subtle)',
-                            borderRadius: 6,
-                        }}
-                    >
-                        <div className="col" style={{ gap: 2 }}>
-                            <div className="field-label" style={{ marginBottom: 0 }}>
-                                오늘 쿼터
-                            </div>
-                            <div className="mono tabular" style={{ fontSize: 13, fontWeight: 600 }}>
-                                {quotaUsed} / {quotaMax}{' '}
-                                <span className="faint" style={{ fontWeight: 400 }}>
-                                    GB
-                                </span>
-                            </div>
-                        </div>
-                        <div className={`progress ${pctClass}`} style={{ width: 140 }}>
-                            <div className="progress__fill" style={{ width: `${pct}%` }} />
-                        </div>
-                        <div className="faint mono tabular" style={{ fontSize: 11 }}>
-                            00:00 KST 리셋
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
@@ -205,29 +184,29 @@ export default function DownloadsPage() {
                         <table className="table">
                             <thead>
                                 <tr>
+                                    <th style={{ width: 56 }}>미리보기</th>
                                     <th>Scene</th>
                                     <th>상태</th>
                                     <th style={{ width: 220 }}>진행</th>
                                     <th className="num">용량</th>
                                     <th>시작</th>
+                                    <th>종료</th>
                                     <th>ETA</th>
-                                    <th style={{ width: 140 }}></th>
+                                    <th style={{ width: 140 }}>다운로드</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {visible.map((j) => (
                                     <tr key={j.id}>
                                         <td>
-                                            <div className="col" style={{ gap: 2 }}>
-                                                <div
-                                                    className="mono truncate"
-                                                    style={{ fontSize: 11.5, maxWidth: 420 }}
-                                                >
-                                                    {j.scene}
-                                                </div>
-                                                <div className="mono faint" style={{ fontSize: 11 }}>
-                                                    {j.id}
-                                                </div>
+                                            <Quicklook sceneId={j.scene} size={42} />
+                                        </td>
+                                        <td>
+                                            <div
+                                                className="mono truncate"
+                                                style={{ fontSize: 11.5, maxWidth: 420 }}
+                                            >
+                                                {j.scene}
                                             </div>
                                         </td>
                                         <td>
@@ -235,17 +214,21 @@ export default function DownloadsPage() {
                                         </td>
                                         <td>
                                             {j.status === 'done' ? (
-                                                <span className="faint" style={{ fontSize: 12 }}>
-                                                    —
-                                                </span>
+                                                <div className="row gap-2">
+                                                    <div className="progress progress--success" style={{ flex: 1 }}>
+                                                        <div className="progress__fill" style={{ width: '100%' }} />
+                                                    </div>
+                                                    <span
+                                                        className="mono tabular"
+                                                        style={{ fontSize: 11.5, minWidth: 32, textAlign: 'right' }}
+                                                    >
+                                                        100%
+                                                    </span>
+                                                </div>
                                             ) : j.status === 'failed' ? (
                                                 <div className="progress progress--danger">
                                                     <div className="progress__fill" style={{ width: `${j.progress}%` }} />
                                                 </div>
-                                            ) : j.status === 'pending' ? (
-                                                <span className="faint" style={{ fontSize: 12 }}>
-                                                    관리자 승인 대기 중
-                                                </span>
                                             ) : j.status === 'queued' ? (
                                                 <span className="faint" style={{ fontSize: 12 }}>
                                                     앞에 {Math.max(0, jobs.filter((k) => k.status === 'running').length)}건
@@ -272,6 +255,9 @@ export default function DownloadsPage() {
                                         </td>
                                         <td className="mono tabular faint" style={{ fontSize: 12 }}>
                                             {j.started}
+                                        </td>
+                                        <td className="mono tabular faint" style={{ fontSize: 12 }}>
+                                            {j.finished}
                                         </td>
                                         <td
                                             className={j.status === 'failed' ? '' : 'mono tabular'}

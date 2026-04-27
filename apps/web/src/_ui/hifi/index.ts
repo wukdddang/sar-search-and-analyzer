@@ -1,4 +1,5 @@
 export { Icon, type IconName } from './Icon';
+export { InfoTip } from './InfoTip';
 export { ToastProvider, useToast } from './ToastProvider';
 export type { ToastOptions, ToastTone } from './ToastProvider';
 export { Modal } from './Modal';
