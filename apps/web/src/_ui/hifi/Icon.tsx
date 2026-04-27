@@ -32,7 +32,8 @@ export type IconName =
     | 'sun'
     | 'moon'
     | 'info'
-    | 'logout';
+    | 'logout'
+    | 'copy';
 
 const SW = 1.75 as const;
 const SW2 = 2 as const;
@@ -233,6 +234,12 @@ const ICONS: Record<IconName, (p: Props) => React.ReactElement> = {
             <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
             <polyline points="16 17 21 12 16 7" />
             <line x1="21" x2="9" y1="12" y2="12" />
+        </>,
+    ),
+    copy: wrap(
+        <>
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
         </>,
     ),
 };
