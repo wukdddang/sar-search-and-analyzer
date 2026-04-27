@@ -313,11 +313,7 @@ interface SlcProps {
 function SlcSection({ jobs, runningCount, onDownload, onRetry, onCancel }: SlcProps) {
     return (
         <div className="card">
-            <SectionHeader
-                title="SLC — NAS 스테이징"
-                desc="원본 SLC 는 용량이 커 NAS 에 먼저 저장한 뒤 받습니다."
-                count={jobs.length}
-            />
+            <SectionHeader title="SLC" count={jobs.length} />
             {jobs.length === 0 ? (
                 <div className="empty" style={{ padding: 40 }}>
                     <div className="empty__icon">📭</div>
@@ -459,11 +455,7 @@ interface S3Props {
 function S3Section({ jobs, onDownload, onCopy }: S3Props) {
     return (
         <div className="card">
-            <SectionHeader
-                title="GRD · OCN · RAW — S3 직링크"
-                desc="메타데이터에 등록된 Copernicus S3 경로로 바로 다운로드합니다. NAS 스테이징을 거치지 않습니다."
-                count={jobs.length}
-            />
+            <SectionHeader title="GRD · OCN · RAW" count={jobs.length} />
             {jobs.length === 0 ? (
                 <div className="empty" style={{ padding: 40 }}>
                     <div className="empty__icon">📭</div>
@@ -541,26 +533,20 @@ function S3Section({ jobs, onDownload, onCopy }: S3Props) {
     );
 }
 
-function SectionHeader({ title, desc, count }: { title: string; desc: string; count: number }) {
+function SectionHeader({ title, count }: { title: string; count: number }) {
     return (
         <div
             className="row between"
             style={{
                 padding: '12px 16px',
                 borderBottom: '1px solid var(--border-subtle)',
-                alignItems: 'flex-start',
             }}
         >
-            <div className="col gap-0">
-                <div className="row gap-2" style={{ alignItems: 'baseline' }}>
-                    <strong style={{ fontSize: 13 }}>{title}</strong>
-                    <span className="faint" style={{ fontSize: 12 }}>
-                        {count}건
-                    </span>
-                </div>
-                <div className="faint" style={{ fontSize: 12, marginTop: 2 }}>
-                    {desc}
-                </div>
+            <div className="row gap-2" style={{ alignItems: 'baseline' }}>
+                <strong style={{ fontSize: 13 }}>{title}</strong>
+                <span className="faint" style={{ fontSize: 12 }}>
+                    {count}건
+                </span>
             </div>
         </div>
     );
