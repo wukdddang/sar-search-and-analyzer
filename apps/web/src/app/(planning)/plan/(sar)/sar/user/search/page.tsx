@@ -741,7 +741,14 @@ export default function SearchPage() {
                             aoi={aoi}
                             activeTool={activeTool}
                             onDrawEnd={handleDrawEnd}
-                            onAoiChange={(coords) => setAoi(coords)}
+                            onAoiChange={(coords) => {
+                                setAoi(coords);
+                                // 이미 한 번 검색한 상태라면 AOI 변형(크기/이동)에 따라
+                                // 동일 필터로 재검색을 수행. 아직 검색 전이거나 진행 중이면 건너뜀.
+                                if (hasSearched && !isSearching) {
+                                    executeSearch(appliedFilters);
+                                }
+                            }}
                             fitKey={fitKey}
                         >
                             {activeTool === 'bbox' ? (
@@ -766,49 +773,55 @@ export default function SearchPage() {
                                 </div>
                             ) : null}
                         </MapCanvas>
-                        {isSearching ? (
+                        {/* 항상 마운트해서 opacity/transform 으로 페이드인/아웃. */}
+                        <div
+                            aria-live="polite"
+                            aria-hidden={!isSearching}
+                            style={{
+                                position: 'absolute',
+                                inset: '12px 16px 0',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: 'rgba(15, 18, 22, 0.45)',
+                                backdropFilter: isSearching ? 'blur(2px)' : 'blur(0px)',
+                                zIndex: 10,
+                                borderRadius: 6,
+                                opacity: isSearching ? 1 : 0,
+                                pointerEvents: isSearching ? 'all' : 'none',
+                                transition: 'opacity 220ms ease, backdrop-filter 220ms ease',
+                            }}
+                        >
                             <div
-                                aria-live="polite"
+                                className="row gap-2"
                                 style={{
-                                    position: 'absolute',
-                                    inset: '12px 16px 0',
-                                    display: 'flex',
+                                    background: 'var(--bg-2)',
+                                    border: '1px solid var(--border-default)',
+                                    borderRadius: 8,
+                                    padding: '12px 18px',
+                                    boxShadow: 'var(--shadow-md)',
                                     alignItems: 'center',
-                                    justifyContent: 'center',
-                                    background: 'rgba(15, 18, 22, 0.45)',
-                                    backdropFilter: 'blur(2px)',
-                                    zIndex: 10,
-                                    borderRadius: 6,
-                                    pointerEvents: 'all',
+                                    transform: isSearching ? 'scale(1) translateY(0)' : 'scale(0.94) translateY(4px)',
+                                    opacity: isSearching ? 1 : 0,
+                                    transition:
+                                        'transform 240ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity 220ms ease',
                                 }}
                             >
-                                <div
-                                    className="row gap-2"
+                                <span
+                                    aria-hidden
                                     style={{
-                                        background: 'var(--bg-2)',
-                                        border: '1px solid var(--border-default)',
-                                        borderRadius: 8,
-                                        padding: '12px 18px',
-                                        boxShadow: 'var(--shadow-md)',
-                                        alignItems: 'center',
+                                        display: 'inline-block',
+                                        width: 16,
+                                        height: 16,
+                                        borderRadius: '50%',
+                                        border: '2px solid var(--accent)',
+                                        borderTopColor: 'transparent',
+                                        animation: 'spin 0.8s linear infinite',
                                     }}
-                                >
-                                    <span
-                                        aria-hidden
-                                        style={{
-                                            display: 'inline-block',
-                                            width: 16,
-                                            height: 16,
-                                            borderRadius: '50%',
-                                            border: '2px solid var(--accent)',
-                                            borderTopColor: 'transparent',
-                                            animation: 'spin 0.8s linear infinite',
-                                        }}
-                                    />
-                                    <span style={{ fontSize: 13 }}>scene 검색 중…</span>
-                                </div>
+                                />
+                                <span style={{ fontSize: 13 }}>scene 검색 중…</span>
                             </div>
-                        ) : null}
+                        </div>
                     </div>
 
                     <div
