@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
-import { Icon, PageHeader, Quicklook, useConfirm, useToast } from '@/_ui/hifi';
+import { Icon, PageHeader, Quicklook, useToast } from '@/_ui/hifi';
 
 type ProductKind = 'SLC' | 'GRD' | 'OCN' | 'RAW';
 type JobStatus = 'running' | 'queued' | 'done' | 'failed';
@@ -153,7 +153,6 @@ type KindKey = 'all' | 'slc' | 's3';
 
 export default function DownloadsPage() {
     const toast = useToast();
-    const confirm = useConfirm();
     const [jobs, setJobs] = useState<Job[]>(INITIAL_JOBS);
     const [kind, setKind] = useState<KindKey>('all');
 
@@ -221,17 +220,6 @@ export default function DownloadsPage() {
         );
         toast('재시도 대기열에 추가됨', { tone: 'success' });
     };
-    const cancel = async (id: string) => {
-        const ok = await confirm({
-            title: '취소',
-            body: '이 NAS 스테이징을 취소합니다.',
-            confirmLabel: '취소',
-            danger: true,
-        });
-        if (!ok) return;
-        setJobs((prev) => prev.filter((j) => j.id !== id));
-        toast('스테이징 취소됨');
-    };
     const downloadFromNas = (j: Job) =>
         toast(`${j.scene.slice(0, 30)} NAS → 로컬 다운로드 시작`, { tone: 'success' });
     const downloadFromS3 = (j: Job) => {
@@ -290,7 +278,6 @@ export default function DownloadsPage() {
                         runningCount={jobs.filter((j) => j.productKind === 'SLC' && j.status === 'running').length}
                         onDownload={downloadFromNas}
                         onRetry={retry}
-                        onCancel={cancel}
                     />
                 ) : null}
 
@@ -307,10 +294,9 @@ interface SlcProps {
     runningCount: number;
     onDownload: (j: Job) => void;
     onRetry: (id: string) => void;
-    onCancel: (id: string) => void;
 }
 
-function SlcSection({ jobs, runningCount, onDownload, onRetry, onCancel }: SlcProps) {
+function SlcSection({ jobs, runningCount, onDownload, onRetry }: SlcProps) {
     return (
         <div className="card">
             <SectionHeader title="SLC" count={jobs.length} />
@@ -424,15 +410,6 @@ function SlcSection({ jobs, runningCount, onDownload, onRetry, onCancel }: SlcPr
                                                 onClick={() => onRetry(j.id)}
                                             >
                                                 <Icon name="refresh" size={12} /> 재시도
-                                            </button>
-                                        ) : null}
-                                        {j.status === 'running' || j.status === 'queued' ? (
-                                            <button
-                                                type="button"
-                                                className="btn btn--ghost btn--sm"
-                                                onClick={() => onCancel(j.id)}
-                                            >
-                                                취소
                                             </button>
                                         ) : null}
                                     </div>
