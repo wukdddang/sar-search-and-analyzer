@@ -1544,30 +1544,31 @@ function ResultsFilter({
                     n={facetCounts['product:SLC'] ?? 0}
                     onClick={() => setFilters((f) => ({ ...f, productMode: 'slc' }))}
                 />
-                <FilterChip
-                    active={filters.productMode === 'others'}
-                    label="GRD/OCN/RAW"
-                    n={
-                        (facetCounts['product:GRD'] ?? 0) +
-                        (facetCounts['product:OCN'] ?? 0) +
-                        (facetCounts['product:RAW'] ?? 0)
-                    }
-                    onClick={() => setFilters((f) => ({ ...f, productMode: 'others' }))}
-                />
-                {filters.productMode === 'others'
-                    ? (['grd', 'ocn', 'raw'] as const).map((k) => {
-                          const upper = k.toUpperCase();
-                          return (
-                              <FilterChip
-                                  key={k}
-                                  active={filters[k]}
-                                  label={upper}
-                                  n={facetCounts[`product:${upper}`] ?? 0}
-                                  onClick={() => setFilters((f) => ({ ...f, [k]: !f[k] }))}
-                              />
-                          );
-                      })
-                    : null}
+                {(['grd', 'ocn', 'raw'] as const).map((k) => {
+                    const upper = k.toUpperCase();
+                    return (
+                        <FilterChip
+                            key={k}
+                            active={filters.productMode === 'others' && filters[k]}
+                            label={upper}
+                            n={facetCounts[`product:${upper}`] ?? 0}
+                            onClick={() =>
+                                setFilters((f) =>
+                                    f.productMode === 'others'
+                                        ? { ...f, [k]: !f[k] }
+                                        : {
+                                              ...f,
+                                              productMode: 'others',
+                                              grd: false,
+                                              ocn: false,
+                                              raw: false,
+                                              [k]: true,
+                                          },
+                                )
+                            }
+                        />
+                    );
+                })}
             </FilterGroup>
             <Sep />
             <FilterGroup label="편광">
