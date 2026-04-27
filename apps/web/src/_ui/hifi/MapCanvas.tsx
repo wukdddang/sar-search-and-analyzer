@@ -663,6 +663,10 @@ export function MapCanvas({
                 featureProjection: 'EPSG:3857',
             });
             onDrawEndRef.current?.(activeTool, geojson as DrawnGeometry);
+            // 그린 도형은 부모가 AOI 상태로 가져가 aoiSource 에 다시 그린다.
+            // drawSource 에 남겨두면 AOI 해제 후에도 잔상으로 보이므로 즉시 비운다.
+            // (drawend 직후 OL 이 동기적으로 feature 를 추가하므로 microtask 로 미룸.)
+            queueMicrotask(() => src.clear());
         });
         map.addInteraction(draw);
         drawInteractionRef.current = draw;
