@@ -967,7 +967,10 @@ export default function SearchPage() {
                                             <tr
                                                 key={s.id}
                                                 className={selectedSceneId === s.id ? 'is-selected' : ''}
-                                                onClick={() => setSelectedSceneId(s.id)}
+                                                onClick={() => {
+                                                    setSelectedSceneId(s.id);
+                                                    setSceneModal(s);
+                                                }}
                                             >
                                                 <td className="checkbox-col" onClick={(e) => e.stopPropagation()}>
                                                     <input
@@ -981,8 +984,8 @@ export default function SearchPage() {
                                                     <div className="row gap-3">
                                                         <Quicklook sceneId={s.id} size={42} />
                                                         <div
-                                                            className="mono truncate"
-                                                            style={{ fontSize: 11.5, maxWidth: 320 }}
+                                                            className="mono"
+                                                            style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}
                                                         >
                                                             {s.id}
                                                         </div>
