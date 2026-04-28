@@ -1722,20 +1722,15 @@
     from {
         opacity: 1;
         transform: translateX(0);
-        max-height: 80px;
-        margin-bottom: 0;
     }
     to {
         opacity: 0;
-        transform: translateX(16px);
-        max-height: 0;
-        margin-bottom: -8px;
+        transform: translateX(120%);
     }
 }
 .toast--exiting {
-    animation: toastOut 220ms cubic-bezier(0.4, 0, 0.6, 1) forwards;
+    animation: toastOut 220ms cubic-bezier(0.4, 0, 1, 1) forwards;
     pointer-events: none;
-    overflow: hidden;
 }
 
 /* ═════ Map stage ═════ */

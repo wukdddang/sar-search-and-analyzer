@@ -96,6 +96,19 @@ function buildDefaultFilters(): Filters {
     };
 }
 
+function FilterDivider() {
+    return (
+        <hr
+            style={{
+                border: 0,
+                height: 1,
+                background: 'var(--border-subtle)',
+                margin: 0,
+            }}
+        />
+    );
+}
+
 export default function SearchPage() {
     const toast = useToast();
     const { has: inCart, add: addToCart, addMany: addManyToCart } = useHifiCart();
@@ -192,6 +205,39 @@ export default function SearchPage() {
     useEffect(() => {
         setPage(1);
     }, [appliedFilters, query, pageSize]);
+
+    /**
+     * AOI 가 그려져 있고 한 번 검색된 상태에서 사이드바 검색 조건(날짜·미션·제품·편광·Pass)이 바뀌면
+     * 디바운스 후 자동으로 재검색. 초기 마운트나 hasSearched 가 토글된 직후에는 발동하지 않도록
+     * skip 플래그로 제어한다. NAS 보유만/CDSE 강제 갱신 토글은 자동 재검색 트리거에서 제외.
+     */
+    const skipAutoSearchRef = useRef(true);
+    useEffect(() => {
+        if (skipAutoSearchRef.current) {
+            skipAutoSearchRef.current = false;
+            return;
+        }
+        if (!aoi || !hasSearched) return;
+        const t = window.setTimeout(() => {
+            executeSearch(filters);
+        }, 300);
+        return () => window.clearTimeout(t);
+        // executeSearch / aoi / hasSearched 는 의존성에서 제외 — 마지막으로 설정된 시점의 값을
+        // 클로저로 사용하면 충분하며, AOI 변경은 onAoiChange 에서 별도로 재검색을 트리거.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        filters.startDate,
+        filters.endDate,
+        filters.s1a,
+        filters.s1c,
+        filters.productMode,
+        filters.grd,
+        filters.ocn,
+        filters.raw,
+        filters.pol,
+        filters.passA,
+        filters.passD,
+    ]);
 
     const aoiBounds = useMemo(() => {
         if (!aoi || aoi.length < 3) return null;
@@ -487,6 +533,8 @@ export default function SearchPage() {
                             </button>
                         </div>
 
+                        <FilterDivider />
+
                         <div>
                             <label className="field-label">날짜 범위</label>
                             <div style={{ marginTop: 2 }}>
@@ -516,6 +564,8 @@ export default function SearchPage() {
                             </div>
                         </div>
 
+                        <FilterDivider />
+
                         <div>
                             <label className="field-label">미션</label>
                             <div className="row gap-1" style={{ flexWrap: 'wrap' }}>
@@ -533,6 +583,8 @@ export default function SearchPage() {
                                 </span>
                             </div>
                         </div>
+
+                        <FilterDivider />
 
                         <div>
                             <label className="field-label">제품 타입</label>
@@ -601,6 +653,8 @@ export default function SearchPage() {
                             )}
                         </div>
 
+                        <FilterDivider />
+
                         <div>
                             <label className="field-label">편광 (다중 선택)</label>
                             <div className="row gap-1" style={{ flexWrap: 'wrap' }}>
@@ -622,6 +676,8 @@ export default function SearchPage() {
                                 ))}
                             </div>
                         </div>
+
+                        <FilterDivider />
 
                         <div>
                             <label className="field-label">Pass 방향 (다중 선택)</label>

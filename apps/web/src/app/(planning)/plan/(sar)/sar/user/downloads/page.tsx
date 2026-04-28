@@ -126,6 +126,38 @@ const INITIAL_JOBS: Job[] = [
     },
 ];
 
+async function copyToClipboard(text: string): Promise<boolean> {
+    // Secure context (HTTPS / localhost) — Clipboard API 사용 가능.
+    if (typeof navigator !== 'undefined' && navigator.clipboard && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {
+            // 권한 거부 등 — fallback 시도.
+        }
+    }
+    // Fallback: LAN IP / HTTP 접속 시 execCommand('copy').
+    if (typeof document === 'undefined') return false;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    let ok = false;
+    try {
+        ok = document.execCommand('copy');
+    } catch {
+        ok = false;
+    }
+    document.body.removeChild(ta);
+    return ok;
+}
+
 function formatDateTime(d: Date) {
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, '0');
@@ -207,7 +239,7 @@ export default function DownloadsPage() {
     const kindTabs: [KindKey, string, number][] = [
         ['all', '전체', jobs.length],
         ['slc', 'SLC (NAS 스테이징)', slcJobs.length],
-        ['s3', 'S3 직링크 (GRD/OCN/RAW)', s3Jobs.length],
+        ['s3', 'GRD / OCN / RAW (S3)', s3Jobs.length],
     ];
 
     const retry = (id: string) => {
@@ -229,12 +261,8 @@ export default function DownloadsPage() {
     };
     const copyS3Path = async (j: Job) => {
         if (!j.s3Path) return;
-        try {
-            await navigator.clipboard.writeText(j.s3Path);
-            toast('S3 경로 복사됨', { tone: 'success' });
-        } catch {
-            toast('클립보드 복사 실패', { tone: 'danger' });
-        }
+        const ok = await copyToClipboard(j.s3Path);
+        toast(ok ? 'S3 경로 복사됨' : '클립보드 복사 실패', { tone: ok ? 'success' : 'danger' });
     };
 
     const showSlc = kind === 'all' || kind === 'slc';
@@ -446,7 +474,7 @@ function S3Section({ jobs, onDownload, onCopy }: S3Props) {
                             <th>Scene</th>
                             <th className="num">용량</th>
                             <th>S3 경로</th>
-                            <th style={{ width: 200 }}>다운로드</th>
+                            <th style={{ width: 120 }}>다운로드</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -469,17 +497,31 @@ function S3Section({ jobs, onDownload, onCopy }: S3Props) {
                                     {j.size}
                                 </td>
                                 <td>
-                                    <div
-                                        className="mono"
-                                        style={{
-                                            fontSize: 11,
-                                            color: 'var(--text-secondary)',
-                                            wordBreak: 'break-all',
-                                            maxWidth: 540,
-                                        }}
-                                        title={j.s3Path}
-                                    >
-                                        {j.s3Path}
+                                    <div className="row gap-2" style={{ alignItems: 'center' }}>
+                                        <div
+                                            className="mono"
+                                            style={{
+                                                fontSize: 11,
+                                                color: 'var(--text-secondary)',
+                                                wordBreak: 'break-all',
+                                                maxWidth: 540,
+                                                flex: 1,
+                                            }}
+                                            title={j.s3Path}
+                                        >
+                                            {j.s3Path}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="btn btn--ghost btn--sm"
+                                            data-tooltip="S3 경로 복사"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                onCopy(j);
+                                            }}
+                                        >
+                                            <Icon name="copy" size={12} />
+                                        </button>
                                     </div>
                                 </td>
                                 <td onClick={(e) => e.stopPropagation()}>
@@ -490,14 +532,6 @@ function S3Section({ jobs, onDownload, onCopy }: S3Props) {
                                             onClick={() => onDownload(j)}
                                         >
                                             <Icon name="download" size={12} /> 받기
-                                        </button>
-                                        <button
-                                            type="button"
-                                            className="btn btn--ghost btn--sm"
-                                            data-tooltip="S3 경로 복사"
-                                            onClick={() => onCopy(j)}
-                                        >
-                                            <Icon name="copy" size={12} />
                                         </button>
                                     </div>
                                 </td>
