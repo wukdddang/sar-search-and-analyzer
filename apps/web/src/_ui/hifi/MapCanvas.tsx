@@ -32,7 +32,7 @@ const SATELLITE_URL = 'https://server.arcgisonline.com/ArcGIS/rest/services/Worl
 
 export type MapTool = 'polygon' | 'bbox' | 'upload';
 
-export type FootprintKind = 'have' | 'need' | 'aoi';
+export type FootprintKind = 'have' | 'need' | 'aoi' | 'candidate' | 'common';
 
 /** Minimal GeoJSON geometry shape — lon/lat. Avoids dependency on `@types/geojson`. */
 export type DrawnGeometry =
@@ -100,6 +100,10 @@ const COLORS = {
     have: { stroke: '#22d3ee', fill: 'rgba(34,211,238,0.14)' },
     need: { stroke: '#fbbf24', fill: 'rgba(251,191,36,0.14)' },
     aoi: { stroke: '#818cf8', fill: 'rgba(129,140,248,0.18)' },
+    /** 가용 후보 — 가벼운 outline 만, fill 없음. 후보 풋프린트가 많을 때 시각적 노이즈 최소화. */
+    candidate: { stroke: '#94a3b8', fill: 'rgba(148,163,184,0.0)' },
+    /** 공통 커버리지 — 선택된 모든 scene 의 footprint 교집합. 분석 가용 영역. */
+    common: { stroke: '#10b981', fill: 'rgba(16,185,129,0.20)' },
 } as const;
 
 const TOOLS: ReadonlyArray<[IconName, MapTool, string]> = [
@@ -134,10 +138,12 @@ function ringToPolygon(coords: Array<[number, number]>) {
 
 function makeFootprintStyle(kind: FootprintKind, active: boolean, label?: string) {
     const c = COLORS[kind];
+    // candidate: outline-only, 더 얇은 stroke. active 인 candidate 는 hover 강조용으로 좀 더 진하게.
+    const baseWidth = kind === 'candidate' ? (active ? 2 : 0.9) : active ? 2.5 : 1.5;
     return new Style({
         stroke: new Stroke({
             color: c.stroke,
-            width: active ? 2.5 : 1.5,
+            width: baseWidth,
             lineDash: kind === 'aoi' ? [6, 4] : undefined,
         }),
         fill: new Fill({ color: c.fill }),

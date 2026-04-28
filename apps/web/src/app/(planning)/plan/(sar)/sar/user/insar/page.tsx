@@ -24,6 +24,7 @@ import {
     useToast,
     type MapFootprint,
     type MapPoint,
+    type MapTool,
 } from '@/_ui/hifi';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -283,6 +284,78 @@ function parseAoiFromForm(f: RequestForm): Array<[number, number]> | null {
     ];
 }
 
+/**
+ * 두 풋프린트(폴리곤 ring) 의 겹침 비율을 bbox 근사로 계산.
+ * 결과 = (교집합 면적 / 더 작은 쪽 풋프린트 면적) × 100. 0 ~ 100.
+ *
+ * DInSAR 가이드라인:
+ *   ≥80% — 안정적 (동일 트랙/궤도 기준 일반적)
+ *   70~80% — 권장 하한선
+ *   <70% — 분석 가용 면적이 좁아 권장하지 않음
+ * (단, 본 UI 에서는 정보로만 표시하고 제출을 막지는 않음.)
+ */
+function bboxOverlapPercent(
+    a: Array<[number, number]>,
+    b: Array<[number, number]>,
+): number {
+    if (!a.length || !b.length) return 0;
+    const bb = (ring: Array<[number, number]>) => {
+        let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+        for (const [lon, lat] of ring) {
+            if (lon < minLon) minLon = lon;
+            if (lon > maxLon) maxLon = lon;
+            if (lat < minLat) minLat = lat;
+            if (lat > maxLat) maxLat = lat;
+        }
+        return { minLon, maxLon, minLat, maxLat };
+    };
+    const A = bb(a);
+    const B = bb(b);
+    const ix0 = Math.max(A.minLon, B.minLon);
+    const ix1 = Math.min(A.maxLon, B.maxLon);
+    const iy0 = Math.max(A.minLat, B.minLat);
+    const iy1 = Math.min(A.maxLat, B.maxLat);
+    if (ix1 <= ix0 || iy1 <= iy0) return 0;
+    const inter = (ix1 - ix0) * (iy1 - iy0);
+    const aArea = (A.maxLon - A.minLon) * (A.maxLat - A.minLat);
+    const bArea = (B.maxLon - B.minLon) * (B.maxLat - B.minLat);
+    if (aArea <= 0 || bArea <= 0) return 0;
+    return (inter / Math.min(aArea, bArea)) * 100;
+}
+
+/**
+ * 여러 풋프린트(축 정렬 bbox 가정)의 공통 교집합을 폴리곤 ring 으로 반환.
+ * 어느 한 쌍이라도 교차하지 않으면 null.
+ */
+function computeFootprintsIntersection(
+    footprints: Array<Array<[number, number]>>,
+): Array<[number, number]> | null {
+    if (footprints.length === 0) return null;
+    let minLon = -Infinity, maxLon = Infinity, minLat = -Infinity, maxLat = Infinity;
+    for (const fp of footprints) {
+        if (!fp.length) return null;
+        let fMinLon = Infinity, fMaxLon = -Infinity, fMinLat = Infinity, fMaxLat = -Infinity;
+        for (const [lon, lat] of fp) {
+            if (lon < fMinLon) fMinLon = lon;
+            if (lon > fMaxLon) fMaxLon = lon;
+            if (lat < fMinLat) fMinLat = lat;
+            if (lat > fMaxLat) fMaxLat = lat;
+        }
+        minLon = Math.max(minLon, fMinLon);
+        maxLon = Math.min(maxLon, fMaxLon);
+        minLat = Math.max(minLat, fMinLat);
+        maxLat = Math.min(maxLat, fMaxLat);
+    }
+    if (maxLon <= minLon || maxLat <= minLat) return null;
+    return [
+        [minLon, maxLat],
+        [maxLon, maxLat],
+        [maxLon, minLat],
+        [minLon, minLat],
+        [minLon, maxLat],
+    ];
+}
+
 function aoiCenter(aoi: Array<[number, number]> | null): [number, number] | null {
     if (!aoi || aoi.length < 3) return null;
     let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -318,11 +391,17 @@ function generateAvailableScenes(form: RequestForm): AvailableScene[] {
     if (form.s1c) missions.push('S1C');
     if (missions.length === 0) return [];
     const day = 24 * 60 * 60 * 1000;
-    const stepDays = 12 / missions.length;
+    // 고정 anchor 기준 cadence — startDate 가 바뀌어도 각 scene 의 절대 위치(t, id, perp, offset)
+    // 는 불변. 사이드바/핸들로 기간을 줄이면 양 끝에서 scene 만 잘려나가고, 안쪽 마커는 그대로 유지.
+    const ANCHOR = new Date(2024, 0, 1).getTime();
+    const stepMs = (12 / missions.length) * day;
+    const startT = form.startDate.getTime();
+    const endT = form.endDate.getTime();
+    const firstIdx = Math.max(0, Math.ceil((startT - ANCHOR) / stepMs));
+    const lastIdx = Math.floor((endT - ANCHOR) / stepMs);
     const out: AvailableScene[] = [];
-    let i = 0;
-    let t = form.startDate.getTime();
-    while (t <= form.endDate.getTime()) {
+    for (let i = firstIdx; i <= lastIdx && out.length < 400; i++) {
+        const t = ANCHOR + i * stepMs;
         const m = missions[i % missions.length]!;
         const d = new Date(t);
         const yyyy = d.getFullYear();
@@ -343,9 +422,6 @@ function generateAvailableScenes(form: RequestForm): AvailableScene[] {
             perpBaseline: perp,
             footprint: fp,
         });
-        t += stepDays * day;
-        i++;
-        if (i > 400) break; // safety
     }
     return out;
 }
@@ -377,6 +453,52 @@ export default function InsarPage() {
     const [request, setRequest] = useState<RequestForm>(() => buildDefaultRequest());
     const [selectedSceneIds, setSelectedSceneIds] = useState<Set<string>>(() => new Set());
     const [submitting, setSubmitting] = useState(false);
+    const [activeTool, setActiveTool] = useState<MapTool | undefined>(undefined);
+    const [hoveredSceneId, setHoveredSceneId] = useState<string | null>(null);
+    // 기간/AOI/미션이 바뀌면 사용 가능한 scene 을 다시 가져오는 척 — 지도 위에 로딩 오버레이.
+    // 핸들 드래그처럼 deps 가 빠르게 연속 변하는 동안에는 오버레이가 깜빡이지 않아야 하므로
+    // 마지막 변경 후 300ms 동안 잠잠해야 비로소 로딩이 떠야 한다 (debounce on entry).
+    const [fetchingScenes, setFetchingScenes] = useState(false);
+    const fetchEnterRef = useRef<number | null>(null);
+    const fetchExitRef = useRef<number | null>(null);
+    const fetchInitialRef = useRef(true);
+    useEffect(() => {
+        if (fetchInitialRef.current) {
+            fetchInitialRef.current = false;
+            return;
+        }
+        // deps 가 다시 바뀌었으면 진행 중인 entry/exit 타이머 모두 취소하고 표시도 끔.
+        if (fetchEnterRef.current) window.clearTimeout(fetchEnterRef.current);
+        if (fetchExitRef.current) window.clearTimeout(fetchExitRef.current);
+        setFetchingScenes(false);
+        fetchEnterRef.current = window.setTimeout(() => {
+            fetchEnterRef.current = null;
+            setFetchingScenes(true);
+            fetchExitRef.current = window.setTimeout(() => {
+                fetchExitRef.current = null;
+                setFetchingScenes(false);
+            }, 500);
+        }, 300);
+        return () => {
+            if (fetchEnterRef.current) {
+                window.clearTimeout(fetchEnterRef.current);
+                fetchEnterRef.current = null;
+            }
+            if (fetchExitRef.current) {
+                window.clearTimeout(fetchExitRef.current);
+                fetchExitRef.current = null;
+            }
+        };
+    }, [
+        request.startDate,
+        request.endDate,
+        request.s1a,
+        request.s1c,
+        request.nwLat,
+        request.nwLon,
+        request.seLat,
+        request.seLon,
+    ]);
 
     const product = useMemo(() => PRODUCTS.find((p) => p.id === selected) ?? PRODUCTS[0]!, [selected]);
     const filteredProducts = PRODUCTS.filter((p) => typeFilter === '전체' || p.type === typeFilter);
@@ -389,6 +511,17 @@ export default function InsarPage() {
         request.nwLat, request.nwLon, request.seLat, request.seLon,
     ]);
 
+    // DInSAR 모드 + 2개 선택 시 master/slave 풋프린트 겹침 비율 (정보용).
+    const dinsarOverlap = useMemo<number | null>(() => {
+        if (request.type !== 'DInSAR') return null;
+        if (selectedSceneIds.size !== 2) return null;
+        const ids = Array.from(selectedSceneIds);
+        const a = availableScenes.find((s) => s.id === ids[0]);
+        const b = availableScenes.find((s) => s.id === ids[1]);
+        if (!a || !b) return null;
+        return bboxOverlapPercent(a.footprint, b.footprint);
+    }, [request.type, selectedSceneIds, availableScenes]);
+
     // 유형 변경 / scene 목록 변경 시 선택을 재조정
     const toggleSceneSelection = (id: string) => {
         setSelectedSceneIds((prev) => {
@@ -397,10 +530,12 @@ export default function InsarPage() {
                 next.delete(id);
                 return next;
             }
-            // DInSAR: 최대 2개 (master + slave)
+            // DInSAR: 정확히 2개 유지. 이미 2개가 선택돼 있으면 가장 마지막에 선택했던 scene 을
+            // 새로 누른 scene 으로 대체 (Set 의 삽입 순서 마지막 항목을 제거).
             if (request.type === 'DInSAR' && next.size >= 2) {
-                toast('DInSAR 는 master/slave 두 scene 만 선택합니다', { tone: 'warning' });
-                return prev;
+                const arr = Array.from(next);
+                const lastId = arr[arr.length - 1];
+                if (lastId !== undefined) next.delete(lastId);
             }
             next.add(id);
             return next;
@@ -408,26 +543,95 @@ export default function InsarPage() {
     };
     const clearSelectedScenes = () => setSelectedSceneIds(new Set());
 
+    /** 빠른 전체 선택 — DInSAR 면 첫/마지막 scene 으로 페어, 그 외는 모든 가용 scene. */
+    const selectAllScenes = () => {
+        if (availableScenes.length === 0) {
+            toast('선택할 scene 이 없습니다', { tone: 'warning' });
+            return;
+        }
+        if (request.type === 'DInSAR') {
+            const first = availableScenes[0]!;
+            const last = availableScenes[availableScenes.length - 1]!;
+            if (first.id === last.id) {
+                toast('DInSAR 는 두 scene 이 필요합니다 (현재 1개만 가용)', { tone: 'warning' });
+                return;
+            }
+            setSelectedSceneIds(new Set([first.id, last.id]));
+            toast(`첫/마지막 scene 페어 선택 (${first.date} → ${last.date})`, { tone: 'success' });
+            return;
+        }
+        setSelectedSceneIds(new Set(availableScenes.map((s) => s.id)));
+        toast(`${availableScenes.length}개 scene 모두 선택`, { tone: 'success' });
+    };
+
     // 지도 중심: 첫 진입 시점만 사용 (MapCanvas 가 prop 변경 시 view 를 옮기지 않음)
     const initialCenter: [number, number] = requestAoi
         ? aoiCenter(requestAoi) ?? [129.37, 36.02]
         : [129.37, 36.02];
 
-    // 지도 위 footprint / aoi / point — 탭에 따라 분기
+    // 지도 위 footprint — 시각적 노이즈를 최소화하기 위해 후보 outline 은 표시하지 않고,
+    //   • 선택 scene 0~1개: 그 한 장의 footprint 를 라벨과 함께 부각
+    //   • 선택 scene 2개 이상: 개별 footprint 는 흐리게(fill 없는 cyan outline) 깔고
+    //                         그 위에 모든 footprint 의 교집합을 "공통 커버리지"(green)로 강조 + 라벨
+    //   • timeline hover: 해당 scene footprint 만 cyan(fill+stroke)로 1장 추가 표시
+    const selectedScenes = useMemo(
+        () => availableScenes.filter((s) => selectedSceneIds.has(s.id)),
+        [availableScenes, selectedSceneIds],
+    );
+    const commonCoverage = useMemo(() => {
+        if (selectedScenes.length < 2) return null;
+        return computeFootprintsIntersection(selectedScenes.map((s) => s.footprint));
+    }, [selectedScenes]);
+
     const requestFootprints = useMemo<MapFootprint[]>(() => {
-        return availableScenes.map((s) => {
-            const isSel = selectedSceneIds.has(s.id);
-            return {
+        const out: MapFootprint[] = [];
+        if (selectedScenes.length === 1) {
+            // 단일 선택 — 그대로 cyan + 라벨
+            const s = selectedScenes[0]!;
+            out.push({
                 id: s.id,
                 coords: s.footprint,
-                kind: isSel ? ('have' as const) : ('need' as const),
-                label: isSel ? `${s.date} · ${s.mission}` : undefined,
-                active: isSel,
+                kind: 'have',
+                label: `${s.date} · ${s.mission}`,
+                active: true,
                 onClick: () => toggleSceneSelection(s.id),
-            };
-        });
+            });
+        } else if (selectedScenes.length >= 2) {
+            // 다중 선택 — 개별 footprint 는 흐리게(candidate 스타일), 공통 커버리지를 강조
+            for (const s of selectedScenes) {
+                out.push({
+                    id: s.id,
+                    coords: s.footprint,
+                    kind: 'candidate',
+                    onClick: () => toggleSceneSelection(s.id),
+                });
+            }
+            if (commonCoverage) {
+                out.push({
+                    id: '__common-coverage',
+                    coords: commonCoverage,
+                    kind: 'common',
+                    label: `공통 관측 영역 · ${selectedScenes.length} scenes`,
+                    active: true,
+                });
+            }
+        }
+        // hover 한 scene 이 있고, 아직 선택되지 않았다면 단일 cyan 으로 추가 (가장 위)
+        if (hoveredSceneId) {
+            const s = availableScenes.find((x) => x.id === hoveredSceneId);
+            if (s && !selectedSceneIds.has(s.id)) {
+                out.push({
+                    id: `${s.id}__hover`,
+                    coords: s.footprint,
+                    kind: 'have',
+                    label: `${s.date} · ${s.mission}`,
+                    onClick: () => toggleSceneSelection(s.id),
+                });
+            }
+        }
+        return out;
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [availableScenes, selectedSceneIds, request.type]);
+    }, [availableScenes, selectedScenes, commonCoverage, hoveredSceneId, selectedSceneIds]);
 
     const resultsPoints = useMemo<MapPoint[]>(
         () =>
@@ -446,6 +650,55 @@ export default function InsarPage() {
     const mapFootprints = tab === 'request' ? requestFootprints : [];
     const mapPointsList = tab === 'results' ? resultsPoints : [];
     const mapOnClick = tab === 'results' ? (coord: [number, number]) => addPointAt(coord[0], coord[1]) : undefined;
+
+    // ── 요청 모드: 지도에서 AOI 그리기/편집 ───────────────────────────────
+    /** 폴리곤 ring 으로부터 bbox 를 구해 form 의 NW/SE 좌표 4개를 갱신. */
+    const applyAoiFromRing = (ring: Array<[number, number]>) => {
+        let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+        for (const [lon, lat] of ring) {
+            if (lon < minLon) minLon = lon;
+            if (lon > maxLon) maxLon = lon;
+            if (lat < minLat) minLat = lat;
+            if (lat > maxLat) maxLat = lat;
+        }
+        if (!Number.isFinite(minLon)) return;
+        setRequest((f) => ({
+            ...f,
+            nwLat: maxLat.toFixed(4),
+            nwLon: minLon.toFixed(4),
+            seLat: minLat.toFixed(4),
+            seLon: maxLon.toFixed(4),
+        }));
+        // AOI 를 새로 잡으면 기존 scene 선택은 의미 없으므로 초기화.
+        setSelectedSceneIds(new Set());
+    };
+    const handleMapDrawEnd = (
+        _tool: MapTool,
+        geom: { type: string; coordinates: unknown },
+    ) => {
+        if (geom.type === 'Polygon' && Array.isArray(geom.coordinates)) {
+            const ring = (geom.coordinates as number[][][])[0];
+            if (ring && ring.length >= 3) {
+                const coords = ring.map(([lon, lat]) => [lon, lat] as [number, number]);
+                applyAoiFromRing(coords);
+                toast('AOI 적용됨', { tone: 'success' });
+            }
+        }
+        setActiveTool(undefined);
+    };
+    const handleMapAoiEdit = (coords: Array<[number, number]>) => {
+        applyAoiFromRing(coords);
+    };
+
+    // ESC 로 draw 모드 취소
+    useEffect(() => {
+        if (activeTool !== 'bbox' && activeTool !== 'polygon') return;
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setActiveTool(undefined);
+        };
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [activeTool]);
 
     // ── 결과 모드: 점 시계열 ─────────────────────────────────────────────
     const nextPointId = () => {
@@ -576,6 +829,7 @@ export default function InsarPage() {
                             submitting={submitting}
                             onSubmit={submitRequest}
                             onReset={resetRequest}
+                            dinsarOverlap={dinsarOverlap}
                         />
                     ) : (
                         <ResultsSidebar
@@ -618,40 +872,164 @@ export default function InsarPage() {
                             onMapClick={mapOnClick}
                             showLegend={tab === 'results'}
                             legend="velocity"
+                            tools={tab === 'request' ? ['bbox'] : []}
+                            activeTool={tab === 'request' ? activeTool : undefined}
+                            onToolSelect={tab === 'request' ? setActiveTool : undefined}
+                            onDrawEnd={tab === 'request' ? handleMapDrawEnd : undefined}
+                            onAoiChange={tab === 'request' ? handleMapAoiEdit : undefined}
+                        >
+                            {tab === 'request' ? (
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: 12,
+                                        right: 56,
+                                        padding: '6px 10px',
+                                        background: 'var(--bg-2)',
+                                        border: '1px solid var(--border-default)',
+                                        borderRadius: 6,
+                                        fontSize: 11,
+                                        boxShadow: 'var(--shadow-md)',
+                                        pointerEvents: 'none',
+                                        zIndex: 3,
+                                        whiteSpace: 'nowrap',
+                                        display: 'flex',
+                                        flexDirection: 'column',
+                                        gap: 4,
+                                        lineHeight: 1.3,
+                                    }}
+                                >
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span
+                                            style={{
+                                                display: 'inline-block',
+                                                width: 18,
+                                                height: 0,
+                                                borderTop: '1.5px dashed #818cf8',
+                                            }}
+                                        />
+                                        <span>AOI 영역</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span
+                                            style={{
+                                                display: 'inline-block',
+                                                width: 18,
+                                                height: 0,
+                                                borderTop: '1.5px solid #10b981',
+                                            }}
+                                        />
+                                        <span>공통 커버리지</span>
+                                    </div>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                        <span
+                                            style={{
+                                                display: 'inline-block',
+                                                width: 18,
+                                                height: 0,
+                                                borderTop: '1.5px solid #22d3ee',
+                                            }}
+                                        />
+                                        <span>선택/hover scene</span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: 12,
+                                        right: 56,
+                                        padding: '6px 12px',
+                                        background: 'var(--bg-2)',
+                                        border: '1px solid var(--border-default)',
+                                        borderRadius: 6,
+                                        fontSize: 12,
+                                        boxShadow: 'var(--shadow-md)',
+                                        pointerEvents: 'none',
+                                        zIndex: 3,
+                                        whiteSpace: 'nowrap',
+                                    }}
+                                >
+                                    <Icon name="mapPin" size={11} style={{ marginRight: 6, opacity: 0.6 }} />
+                                    {layer} · {opacity}% · 지도 클릭 → 시계열 점 추가
+                                </div>
+                            )}
+                            {tab === 'request' && activeTool === 'bbox' ? (
+                                <div
+                                    style={{
+                                        position: 'absolute',
+                                        top: 12,
+                                        left: '50%',
+                                        transform: 'translateX(-50%)',
+                                        padding: '8px 14px',
+                                        background: 'var(--accent)',
+                                        color: '#fff',
+                                        borderRadius: 6,
+                                        fontSize: 12.5,
+                                        fontWeight: 500,
+                                        boxShadow: 'var(--shadow-md)',
+                                        zIndex: 5,
+                                        pointerEvents: 'none',
+                                    }}
+                                >
+                                    지도에서 드래그해 사각형 AOI 를 그리세요 · ESC 로 취소
+                                </div>
+                            ) : null}
+                        </MapCanvas>
+                        {/* scene 가져오기 로딩 오버레이 — 검색 페이지와 동일 패턴, request 탭에서만. */}
+                        <div
+                            aria-live="polite"
+                            aria-hidden={!(tab === 'request' && fetchingScenes)}
+                            style={{
+                                position: 'absolute',
+                                inset: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                background: 'rgba(15, 18, 22, 0.45)',
+                                backdropFilter:
+                                    tab === 'request' && fetchingScenes ? 'blur(2px)' : 'blur(0px)',
+                                zIndex: 10,
+                                opacity: tab === 'request' && fetchingScenes ? 1 : 0,
+                                pointerEvents: tab === 'request' && fetchingScenes ? 'all' : 'none',
+                                transition: 'opacity 220ms ease, backdrop-filter 220ms ease',
+                            }}
                         >
                             <div
+                                className="row gap-2"
                                 style={{
-                                    position: 'absolute',
-                                    top: 12,
-                                    right: 56,
-                                    padding: '6px 12px',
                                     background: 'var(--bg-2)',
                                     border: '1px solid var(--border-default)',
                                     borderRadius: 6,
-                                    fontSize: 12,
+                                    padding: '10px 16px',
+                                    fontSize: 13,
                                     boxShadow: 'var(--shadow-md)',
-                                    pointerEvents: 'none',
-                                    zIndex: 3,
+                                    alignItems: 'center',
                                 }}
                             >
-                                {tab === 'request' ? (
-                                    <>
-                                        <Icon name="square" size={11} style={{ marginRight: 6, opacity: 0.6 }} />
-                                        AOI 영역 · scene {selectedSceneIds.size}/{availableScenes.length} 선택 · 풋프린트 클릭으로 토글
-                                    </>
-                                ) : (
-                                    <>
-                                        <Icon name="mapPin" size={11} style={{ marginRight: 6, opacity: 0.6 }} />
-                                        {layer} · {opacity}% · 지도 클릭 → 시계열 점 추가
-                                    </>
-                                )}
+                                <span
+                                    aria-hidden
+                                    style={{
+                                        display: 'inline-block',
+                                        width: 14,
+                                        height: 14,
+                                        borderRadius: '50%',
+                                        border: '2px solid var(--accent)',
+                                        borderTopColor: 'transparent',
+                                        animation: 'spin 0.8s linear infinite',
+                                    }}
+                                />
+                                <span>사용 가능한 scene 가져오는 중…</span>
                             </div>
-                        </MapCanvas>
+                        </div>
                     </div>
 
                     <div
                         style={{
-                            height: 260,
+                            // request 모드는 타임라인 콘텐츠에 딱 맞춰 높이가 결정되도록
+                            // height 를 auto 로 두고, results 모드만 차트 공간을 위해 260px 고정.
+                            ...(tab === 'request' ? {} : { height: 260 }),
+                            flexShrink: 0,
                             borderTop: '1px solid var(--border-subtle)',
                             background: 'var(--bg-2)',
                             display: 'flex',
@@ -664,7 +1042,15 @@ export default function InsarPage() {
                                 selected={selectedSceneIds}
                                 onToggle={toggleSceneSelection}
                                 onClear={clearSelectedScenes}
+                                onSelectAll={selectAllScenes}
                                 analysisType={request.type}
+                                rangeStart={request.startDate}
+                                rangeEnd={request.endDate}
+                                onRangeChange={(s, e) =>
+                                    setRequest((f) => ({ ...f, startDate: s, endDate: e }))
+                                }
+                                hoveredId={hoveredSceneId}
+                                onHover={setHoveredSceneId}
                             />
                         ) : (
                             <ResultsBottomPanel
@@ -744,6 +1130,7 @@ interface RequestSidebarProps {
     submitting: boolean;
     onSubmit: () => void;
     onReset: () => void;
+    dinsarOverlap: number | null;
 }
 
 function RequestSidebar({
@@ -756,6 +1143,7 @@ function RequestSidebar({
     submitting,
     onSubmit,
     onReset,
+    dinsarOverlap,
 }: RequestSidebarProps) {
     const minSel = ANALYSIS_META[form.type].minScenes;
     const ready = selectedCount >= minSel;
@@ -889,7 +1277,7 @@ function RequestSidebar({
 
                 <Section title="편광">
                     <div className="row gap-1" style={{ flexWrap: 'wrap' }}>
-                        {['VV', 'VH', 'VV+VH'].map((p) => (
+                        {['VV', 'VH', 'HH', 'HV', 'VV+VH'].map((p) => (
                             <span
                                 key={p}
                                 className={`chip${form.polarization === p ? ' chip--active' : ''}`}
@@ -1064,6 +1452,45 @@ function RequestSidebar({
                     </span>
                     <span className="faint mono tabular">사용 가능 {availableCount}</span>
                 </div>
+                {dinsarOverlap !== null ? (
+                    (() => {
+                        const pct = Math.round(dinsarOverlap);
+                        const tone =
+                            pct >= 80
+                                ? { color: 'var(--success)', label: '안정' }
+                                : pct >= 70
+                                  ? { color: 'var(--warning)', label: '권장 하한' }
+                                  : { color: 'var(--danger)', label: '낮음' };
+                        return (
+                            <div
+                                className="between"
+                                style={{
+                                    marginBottom: 8,
+                                    padding: '6px 8px',
+                                    fontSize: 11.5,
+                                    background: 'var(--bg-2)',
+                                    border: `1px solid ${tone.color}`,
+                                    borderRadius: 4,
+                                    alignItems: 'center',
+                                }}
+                            >
+                                <span className="row gap-2" style={{ alignItems: 'center' }}>
+                                    <span className="faint">master/slave 겹침</span>
+                                    <span
+                                        className="mono tabular"
+                                        style={{ color: tone.color, fontWeight: 600 }}
+                                    >
+                                        {pct}%
+                                    </span>
+                                    <span style={{ color: tone.color, fontSize: 10.5 }}>
+                                        · {tone.label}
+                                    </span>
+                                </span>
+                                <InfoTip text="DInSAR 권장 겹침: ≥80% 안정 / 70~80% 권장 하한 / <70% 분석 가용 면적이 좁음. 정보용이며 제출은 가능합니다." />
+                            </div>
+                        );
+                    })()
+                ) : null}
                 <div className="row gap-2">
                     <button
                         type="button"
@@ -1436,7 +1863,13 @@ interface RequestTimelineProps {
     selected: Set<string>;
     onToggle: (id: string) => void;
     onClear: () => void;
+    onSelectAll: () => void;
     analysisType: AnalysisType;
+    rangeStart: Date;
+    rangeEnd: Date;
+    onRangeChange: (start: Date, end: Date) => void;
+    hoveredId: string | null;
+    onHover: (id: string | null) => void;
 }
 
 function RequestTimelinePanel({
@@ -1444,7 +1877,13 @@ function RequestTimelinePanel({
     selected,
     onToggle,
     onClear,
+    onSelectAll,
     analysisType,
+    rangeStart,
+    rangeEnd,
+    onRangeChange,
+    hoveredId,
+    onHover,
 }: RequestTimelineProps) {
     const minScenes = ANALYSIS_META[analysisType].minScenes;
     const ready = selected.size >= minScenes;
@@ -1474,13 +1913,43 @@ function RequestTimelinePanel({
                         {selected.size}/{minScenes} 선택
                     </span>
                 </div>
-                <div className="row gap-2">
+                <div className="row gap-2" style={{ alignItems: 'center' }}>
                     <span className={`badge ${typeBadge(analysisType)}`} style={{ fontSize: 10 }}>
                         {analysisType}
                     </span>
                     <span className="faint" style={{ fontSize: 11 }}>
                         필요 {requirement}
                     </span>
+                    <span
+                        className="faint"
+                        style={{ fontSize: 10.5, paddingLeft: 8, borderLeft: '1px solid var(--border-subtle)' }}
+                    >
+                        휠로 줌 · Shift+휠로 이동 · 드래그로 이동
+                    </span>
+                    {/* 빠른 선택 — 가용 scene 이 있고 아직 모두 선택되지 않은 경우 노출 */}
+                    {scenes.length > 0 &&
+                    !(
+                        analysisType === 'DInSAR'
+                            ? selected.size === 2 && scenes.length >= 2
+                            : selected.size >= scenes.length
+                    ) ? (
+                        <button
+                            type="button"
+                            className="btn btn--sm"
+                            style={{ height: 22, padding: '0 8px', fontSize: 11 }}
+                            onClick={onSelectAll}
+                            title={
+                                analysisType === 'DInSAR'
+                                    ? '첫/마지막 scene 으로 master/slave 페어 자동 선택 (최대 시간 베이스라인)'
+                                    : '가용 scene 모두 선택'
+                            }
+                        >
+                            <Icon name="plus" size={11} />{' '}
+                            {analysisType === 'DInSAR'
+                                ? '첫/마지막 페어'
+                                : `전체 (${scenes.length})`}
+                        </button>
+                    ) : null}
                     {selected.size > 0 ? (
                         <button
                             type="button"
@@ -1498,18 +1967,27 @@ function RequestTimelinePanel({
                 <div
                     className="empty"
                     style={{
-                        flex: 1,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        padding: 16,
+                        padding: 24,
                         fontSize: 12,
+                        minHeight: 80,
                     }}
                 >
                     AOI · 기간 · 미션 조건을 확인해주세요 — 사용 가능한 scene 이 없습니다
                 </div>
             ) : (
-                <SceneTimelineGraph scenes={scenes} selected={selected} onToggle={onToggle} />
+                <SceneTimelineGraph
+                    scenes={scenes}
+                    selected={selected}
+                    onToggle={onToggle}
+                    rangeStart={rangeStart}
+                    rangeEnd={rangeEnd}
+                    onRangeChange={onRangeChange}
+                    hoveredId={hoveredId}
+                    onHover={onHover}
+                />
             )}
         </>
     );
@@ -1540,10 +2018,26 @@ interface SceneTimelineGraphProps {
     scenes: AvailableScene[];
     selected: Set<string>;
     onToggle: (id: string) => void;
+    /** 현재 사이드바의 기간 — 핸들 표시 + drag 시 이 값을 갱신. */
+    rangeStart: Date;
+    rangeEnd: Date;
+    onRangeChange: (start: Date, end: Date) => void;
+    hoveredId: string | null;
+    onHover: (id: string | null) => void;
 }
 
-function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphProps) {
+function SceneTimelineGraph({
+    scenes,
+    selected,
+    onToggle,
+    rangeStart,
+    rangeEnd,
+    onRangeChange,
+    hoveredId,
+    onHover,
+}: SceneTimelineGraphProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
+    const svgRef = useRef<SVGSVGElement | null>(null);
     const [containerW, setContainerW] = useState(900);
 
     useEffect(() => {
@@ -1580,13 +2074,18 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
     const [zoom, setZoom] = useState(initialZoom);
     const [centerMs, setCenterMs] = useState((minSceneT + maxSceneT) / 2);
 
-    // scene 셋이 새로 들어오면 fit
-    const sceneKey = `${minSceneT}-${maxSceneT}-${scenes.length}`;
+    // 첫 scene 데이터가 들어오는 그 1회만 자동 fit. 이후엔 range 핸들/pan 결과를 보존.
+    const didFitRef = useRef(false);
     useEffect(() => {
+        if (scenes.length === 0) {
+            didFitRef.current = false;
+            return;
+        }
+        if (didFitRef.current) return;
         setCenterMs((minSceneT + maxSceneT) / 2);
         setZoom(initialZoom);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [sceneKey]);
+        didFitRef.current = true;
+    }, [scenes.length, minSceneT, maxSceneT, initialZoom]);
 
     const spanMs = ZOOM_DAYS[zoom]! * day;
     const startMs = centerMs - spanMs / 2;
@@ -1654,17 +2153,49 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [startMs, endMs, innerW, zoom]);
 
-    // 드래그 pan
+    // 드래그 pan / range 핸들 drag
     const dragRef = useRef<{ x: number; center: number } | null>(null);
     const draggedRef = useRef(false);
     const [grabbing, setGrabbing] = useState(false);
+    const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null);
+
+    /** 화면 X 좌표 → timestamp 로 환산. SVG 의 boundingRect 필요. */
+    const xToTime = (clientX: number, svgEl: SVGSVGElement): number => {
+        const rect = svgEl.getBoundingClientRect();
+        const x = clientX - rect.left;
+        return startMs + ((x - PAD_LEFT) / innerW) * spanMs;
+    };
 
     const onMouseDown = (e: React.MouseEvent) => {
+        if (draggingHandle) return;
         dragRef.current = { x: e.clientX, center: centerMs };
         draggedRef.current = false;
         setGrabbing(true);
     };
-    const onMouseMove = (e: React.MouseEvent) => {
+    const onMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+        // range 핸들 drag 가 활성이면 그쪽이 우선.
+        if (draggingHandle) {
+            const t = xToTime(e.clientX, e.currentTarget);
+            const minSpan = 6 * day;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayMs = today.getTime();
+            if (draggingHandle === 'start') {
+                const maxStart = rangeEnd.getTime() - minSpan;
+                const snapped = startOfDay(Math.min(t, maxStart));
+                if (snapped !== rangeStart.getTime()) {
+                    onRangeChange(new Date(snapped), rangeEnd);
+                }
+            } else {
+                const minEnd = rangeStart.getTime() + minSpan;
+                const clampedToToday = Math.min(t, todayMs);
+                const snapped = startOfDay(Math.max(clampedToToday, minEnd));
+                if (snapped !== rangeEnd.getTime()) {
+                    onRangeChange(rangeStart, new Date(snapped));
+                }
+            }
+            return;
+        }
         const d = dragRef.current;
         if (!d) return;
         const dx = e.clientX - d.x;
@@ -1673,6 +2204,7 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
         setCenterMs(d.center - dx * msPerPx);
     };
     const endDrag = () => {
+        if (draggingHandle) setDraggingHandle(null);
         dragRef.current = null;
         setGrabbing(false);
         // 다음 click 까지 draggedRef 유지 → 0ms 후 리셋
@@ -1681,26 +2213,38 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
         }, 0);
     };
 
-    const onWheel = (e: React.WheelEvent) => {
-        if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            setZoom((z) => Math.min(5, Math.max(1, z + (e.deltaY < 0 ? 1 : -1))));
-        } else {
-            // 가로 휠 또는 일반 스크롤 → 가로 pan
-            const dx = e.deltaX !== 0 ? e.deltaX : e.deltaY;
-            const msPerPx = spanMs / innerW;
-            setCenterMs((c) => c + dx * msPerPx);
-        }
-    };
+    const onHandleMouseDown = (which: 'start' | 'end') =>
+        (e: React.MouseEvent) => {
+            e.stopPropagation();
+            setDraggingHandle(which);
+            draggedRef.current = true; // 이 직후 click 으로 scene 토글되는 것을 막기 위함
+        };
+
+    // React 의 onWheel 은 passive 라 preventDefault 가 무시되므로 네이티브 리스너로 부착해
+    // 페이지 스크롤이 새지 않게 한다. Shift + 휠 → 가로 pan, 그 외엔 줌 (deltaY 기준).
+    useEffect(() => {
+        const el = svgRef.current;
+        if (!el) return;
+        const onNativeWheel = (e: WheelEvent) => {
+            if (e.shiftKey) {
+                const dx = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+                if (dx === 0) return;
+                e.preventDefault();
+                const msPerPx = spanMs / innerW;
+                setCenterMs((c) => c + dx * msPerPx);
+            } else {
+                if (e.deltaY === 0) return;
+                e.preventDefault();
+                setZoom((z) => Math.min(5, Math.max(1, z + (e.deltaY < 0 ? 1 : -1))));
+            }
+        };
+        el.addEventListener('wheel', onNativeWheel, { passive: false });
+        return () => el.removeEventListener('wheel', onNativeWheel);
+    }, [spanMs, innerW]);
 
     const handleSceneClick = (s: AvailableScene) => {
         if (draggedRef.current) return;
         onToggle(s.id);
-    };
-
-    const fit = () => {
-        setCenterMs((minSceneT + maxSceneT) / 2);
-        setZoom(initialZoom);
     };
 
     const selectedOrder = useMemo(() => {
@@ -1709,72 +2253,20 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
         return m;
     }, [selected]);
 
-    const visibleStartLabel = formatYmd(new Date(startMs));
-    const visibleEndLabel = formatYmd(new Date(endMs));
-
     return (
         <div
             ref={containerRef}
             style={{
-                flex: 1,
+                // height 를 콘텐츠(SVG 의 totalH)에 정확히 맞춰서 lane 수가 늘어날 때만 패널이 커지도록.
+                height: totalH,
+                flexShrink: 0,
                 position: 'relative',
                 background: 'var(--bg-2)',
                 overflow: 'hidden',
             }}
         >
-            {/* 줌 컨트롤 + 범위 표시 */}
-            <div
-                style={{
-                    position: 'absolute',
-                    top: 6,
-                    right: 8,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    zIndex: 3,
-                    background: 'color-mix(in srgb, var(--bg-1) 88%, transparent)',
-                    padding: '3px 6px',
-                    borderRadius: 4,
-                    border: '1px solid var(--border-subtle)',
-                }}
-            >
-                <span className="mono tabular faint" style={{ fontSize: 10 }}>
-                    {visibleStartLabel} ~ {visibleEndLabel}
-                </span>
-                <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    style={{ width: 22, height: 22, padding: 0, fontSize: 13 }}
-                    onClick={() => setZoom((z) => Math.min(5, z + 1))}
-                    disabled={zoom >= 5}
-                    aria-label="확대"
-                    title="확대"
-                >
-                    +
-                </button>
-                <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    style={{ width: 22, height: 22, padding: 0, fontSize: 13 }}
-                    onClick={() => setZoom((z) => Math.max(1, z - 1))}
-                    disabled={zoom <= 1}
-                    aria-label="축소"
-                    title="축소"
-                >
-                    −
-                </button>
-                <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    style={{ height: 22, padding: '0 6px', fontSize: 10.5 }}
-                    onClick={fit}
-                    title="모든 scene 보기"
-                >
-                    fit
-                </button>
-            </div>
-
             <svg
+                ref={svgRef}
                 width={containerW}
                 height={totalH}
                 style={{
@@ -1786,7 +2278,6 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
                 onMouseMove={onMouseMove}
                 onMouseUp={endDrag}
                 onMouseLeave={endDrag}
-                onWheel={onWheel}
             >
                 <defs>
                     <clipPath id="edsc-track-clip">
@@ -1940,73 +2431,6 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
                         );
                     })()}
 
-                    {/* scene marker — 좁은 vertical bar */}
-                    {scenes.map((s) => {
-                        const t = new Date(s.isoDate).getTime();
-                        if (t < startMs - day || t > endMs + day) return null;
-                        const x = xFor(t);
-                        const laneIdx = missions.indexOf(s.mission);
-                        if (laneIdx < 0) return null;
-                        const yTop = HEADER_H + laneIdx * LANE_H + 5;
-                        const h = LANE_H - 10;
-                        const isSel = selected.has(s.id);
-                        const order = selectedOrder.get(s.id);
-                        const color = MISSION_COLOR[s.mission];
-                        const w = isSel ? 6 : 4;
-                        return (
-                            <g
-                                key={s.id}
-                                onClick={() => handleSceneClick(s)}
-                                style={{ cursor: 'pointer' }}
-                            >
-                                <title>
-                                    {`${s.date} · ${s.mission}/${s.pass} · perp ${s.perpBaseline >= 0 ? '+' : ''}${s.perpBaseline}m${isSel ? ` · 선택#${order}` : ''}`}
-                                </title>
-                                {/* 클릭 hit area */}
-                                <rect
-                                    x={x - 7}
-                                    y={yTop - 2}
-                                    width={14}
-                                    height={h + 4}
-                                    fill="transparent"
-                                />
-                                <rect
-                                    x={x - w / 2}
-                                    y={yTop}
-                                    width={w}
-                                    height={h}
-                                    fill={isSel ? color : color}
-                                    fillOpacity={isSel ? 1 : 0.55}
-                                    stroke={isSel ? '#fff' : 'transparent'}
-                                    strokeWidth={isSel ? 1.5 : 0}
-                                    rx={1}
-                                />
-                                {isSel && order ? (
-                                    <>
-                                        <circle
-                                            cx={x}
-                                            cy={yTop - 4}
-                                            r={6.5}
-                                            fill="var(--accent)"
-                                            stroke="var(--bg-2)"
-                                            strokeWidth={1.2}
-                                        />
-                                        <text
-                                            x={x}
-                                            y={yTop - 1.5}
-                                            fontSize={9}
-                                            fontWeight={700}
-                                            fill="#fff"
-                                            textAnchor="middle"
-                                            fontFamily="var(--font-mono)"
-                                        >
-                                            {order}
-                                        </text>
-                                    </>
-                                ) : null}
-                            </g>
-                        );
-                    })}
                 </g>
 
                 {/* 좌측 거터 (lane 라벨) — 클립 밖에서 항상 표시 */}
@@ -2090,20 +2514,198 @@ function SceneTimelineGraph({ scenes, selected, onToggle }: SceneTimelineGraphPr
                     stroke="var(--border-default)"
                     strokeWidth={1}
                 />
-            </svg>
 
-            <div
-                style={{
-                    position: 'absolute',
-                    bottom: 6,
-                    left: 12,
-                    fontSize: 10,
-                    color: 'var(--text-tertiary)',
-                    pointerEvents: 'none',
-                }}
-            >
-                드래그로 이동 · ⌘/ctrl + 휠로 줌 · scene 클릭으로 선택
-            </div>
+                {/* 마지막 그룹 — scene 마커 + dim overlay + range 핸들. 헤더/lane 보더 위에 그려진다. */}
+                <g clipPath="url(#edsc-track-clip)">
+                    {/* scene marker — 좁은 vertical bar (border 위) */}
+                    {scenes.map((s) => {
+                        const t = new Date(s.isoDate).getTime();
+                        if (t < startMs - day || t > endMs + day) return null;
+                        const x = xFor(t);
+                        const laneIdx = missions.indexOf(s.mission);
+                        if (laneIdx < 0) return null;
+                        const yTop = HEADER_H + laneIdx * LANE_H + 5;
+                        const h = LANE_H - 10;
+                        const isSel = selected.has(s.id);
+                        const isHov = hoveredId === s.id;
+                        const order = selectedOrder.get(s.id);
+                        const color = MISSION_COLOR[s.mission];
+                        const w = isSel ? 6 : isHov ? 5 : 4;
+                        return (
+                            <g
+                                key={s.id}
+                                onClick={() => handleSceneClick(s)}
+                                onMouseEnter={() => onHover(s.id)}
+                                onMouseLeave={() => onHover(null)}
+                                style={{ cursor: 'pointer' }}
+                            >
+                                <title>
+                                    {`${s.date} · ${s.mission}/${s.pass} · perp ${s.perpBaseline >= 0 ? '+' : ''}${s.perpBaseline}m${isSel ? ` · 선택#${order}` : ''}`}
+                                </title>
+                                <rect
+                                    x={x - 7}
+                                    y={yTop - 2}
+                                    width={14}
+                                    height={h + 4}
+                                    fill="transparent"
+                                />
+                                <rect
+                                    x={x - w / 2}
+                                    y={yTop}
+                                    width={w}
+                                    height={h}
+                                    fill={color}
+                                    fillOpacity={isSel ? 1 : isHov ? 0.85 : 0.55}
+                                    stroke={isSel || isHov ? '#fff' : 'transparent'}
+                                    strokeWidth={isSel ? 1.5 : isHov ? 1 : 0}
+                                    rx={1}
+                                />
+                                {isSel && order ? (
+                                    <>
+                                        <circle
+                                            cx={x}
+                                            cy={yTop - 4}
+                                            r={6.5}
+                                            fill="var(--accent)"
+                                            stroke="var(--bg-2)"
+                                            strokeWidth={1.2}
+                                        />
+                                        <text
+                                            x={x}
+                                            y={yTop - 1.5}
+                                            fontSize={9}
+                                            fontWeight={700}
+                                            fill="#fff"
+                                            textAnchor="middle"
+                                            fontFamily="var(--font-mono)"
+                                        >
+                                            {order}
+                                        </text>
+                                    </>
+                                ) : null}
+                            </g>
+                        );
+                    })}
+
+                    {(() => {
+                        const xS = xFor(rangeStart.getTime());
+                        const xE = xFor(rangeEnd.getTime());
+                        const leftDimW = Math.max(0, Math.min(xS, PAD_LEFT + innerW) - PAD_LEFT);
+                        const rightDimX = Math.max(PAD_LEFT, xE);
+                        const rightDimW = Math.max(0, PAD_LEFT + innerW - rightDimX);
+                        return (
+                            <g style={{ pointerEvents: 'none' }}>
+                                {leftDimW > 0 ? (
+                                    <rect
+                                        x={PAD_LEFT}
+                                        y={HEADER_H}
+                                        width={leftDimW}
+                                        height={lanesH}
+                                        fill="rgba(15,18,22,0.42)"
+                                    />
+                                ) : null}
+                                {rightDimW > 0 ? (
+                                    <rect
+                                        x={rightDimX}
+                                        y={HEADER_H}
+                                        width={rightDimW}
+                                        height={lanesH}
+                                        fill="rgba(15,18,22,0.42)"
+                                    />
+                                ) : null}
+                                {xE > xS ? (
+                                    <rect
+                                        x={Math.max(xS, PAD_LEFT)}
+                                        y={HEADER_H}
+                                        width={Math.max(0, Math.min(xE, PAD_LEFT + innerW) - Math.max(xS, PAD_LEFT))}
+                                        height={lanesH}
+                                        fill="transparent"
+                                        stroke="var(--accent)"
+                                        strokeWidth={1}
+                                        strokeOpacity={0.5}
+                                    />
+                                ) : null}
+                            </g>
+                        );
+                    })()}
+
+                    {(['start', 'end'] as const).map((which) => {
+                        const t = which === 'start' ? rangeStart.getTime() : rangeEnd.getTime();
+                        const x = xFor(t);
+                        const dateStr = formatYmd(which === 'start' ? rangeStart : rangeEnd);
+                        const isActive = draggingHandle === which;
+                        return (
+                            <g
+                                key={`handle-${which}`}
+                                style={{ cursor: 'ew-resize' }}
+                                onMouseDown={onHandleMouseDown(which)}
+                            >
+                                <title>{`${which === 'start' ? '시작' : '종료'}: ${dateStr} (드래그로 조절)`}</title>
+                                <rect
+                                    x={x - 8}
+                                    y={0}
+                                    width={16}
+                                    height={totalH}
+                                    fill="transparent"
+                                />
+                                <rect
+                                    x={x - 2}
+                                    y={0}
+                                    width={4}
+                                    height={totalH}
+                                    fill="var(--accent)"
+                                    fillOpacity={isActive ? 1 : 0.85}
+                                />
+                                <rect
+                                    x={x - 5}
+                                    y={HEADER_H - 10}
+                                    width={10}
+                                    height={20}
+                                    fill="var(--accent)"
+                                    rx={2}
+                                />
+                                <line
+                                    x1={x - 1.5}
+                                    x2={x - 1.5}
+                                    y1={HEADER_H - 6}
+                                    y2={HEADER_H + 6}
+                                    stroke="#fff"
+                                    strokeWidth={0.7}
+                                    strokeOpacity={0.85}
+                                />
+                                <line
+                                    x1={x + 1.5}
+                                    x2={x + 1.5}
+                                    y1={HEADER_H - 6}
+                                    y2={HEADER_H + 6}
+                                    stroke="#fff"
+                                    strokeWidth={0.7}
+                                    strokeOpacity={0.85}
+                                />
+                                <rect
+                                    x={x - 38}
+                                    y={totalH - 16}
+                                    width={76}
+                                    height={14}
+                                    fill="var(--accent)"
+                                    rx={2}
+                                />
+                                <text
+                                    x={x}
+                                    y={totalH - 5.5}
+                                    fontSize={9.5}
+                                    fontWeight={700}
+                                    fill="#fff"
+                                    textAnchor="middle"
+                                    fontFamily="var(--font-mono)"
+                                >
+                                    {dateStr}
+                                </text>
+                            </g>
+                        );
+                    })}
+                </g>
+            </svg>
         </div>
     );
 }
@@ -2113,6 +2715,13 @@ function formatYmd(d: Date): string {
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     const dd = String(d.getDate()).padStart(2, '0');
     return `${yyyy}-${mm}-${dd}`;
+}
+
+/** 임의의 timestamp 를 자정(00:00) 으로 스냅. */
+function startOfDay(ts: number): number {
+    const d = new Date(ts);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
 }
 
 // ────────────────────────────────────────────────────────────────────────────
